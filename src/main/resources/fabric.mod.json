@@ -28,7 +28,10 @@
 			}
 		],
 		"client": [
-			"foraginghelpermod.ForagingHelperClient"
+			{
+				"value": "foraginghelpermod.ForagingHelperClient",
+				"adapter": "kotlin"
+			}
 		]
 
 	},
