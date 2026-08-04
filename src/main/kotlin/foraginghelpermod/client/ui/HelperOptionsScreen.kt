@@ -17,6 +17,7 @@ import kotlin.math.roundToInt
 class HelperOptionsScreen : Screen(Text.translatable("screen.oriforaginhelpermod.options")) {
 	private val options = listOf(
 		OptionRow("Enable Helper", "Run foraging automation", { HelperConfig.enabled }, { HelperConfig.enabled = it }),
+		OptionRow("Prefer Small Trees", "Favor small trees for more whole-tree bonuses", { HelperConfig.preferSmallTrees }, { HelperConfig.preferSmallTrees = it }),
 		OptionRow("Auto Break", "Break foraging targets automatically", { HelperConfig.autoBreak }, { HelperConfig.autoBreak = it }),
 		OptionRow("Look at Target", "Face the current foraging target", { HelperConfig.lookAtTarget }, { HelperConfig.lookAtTarget = it }),
 		OptionRow("Show Status HUD", "Show ON/OFF status in the corner", { HelperConfig.showStatusHud }, { HelperConfig.showStatusHud = it }),

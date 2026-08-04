@@ -9,4 +9,6 @@ object HelperConfig {
 	var lookAtTarget: Boolean = true
 	var showStatusHud: Boolean = true
 	var sneakWhileActive: Boolean = false
+	/** ON = favor small trees (more whole-tree bonuses); OFF = favor larger trees. */
+	var preferSmallTrees: Boolean = true
 }

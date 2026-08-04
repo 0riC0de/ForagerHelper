@@ -38,14 +38,24 @@ object StatusHud {
 		val trees = InputController.treeCount
 		val dist = InputController.nearestDistance()
 		val target = InputController.targetLog
+		val size = InputController.selectedTreeSize()
+		val mode = if (HelperConfig.preferSmallTrees) "Small" else "Large"
 
-		val scanLine = if (dist != null && target != null) {
-			"Trees: $trees  |  Nearest: %.1fm".format(dist)
+		val scanLine = if (dist != null && target != null && size != null) {
+			"Trees: $trees  |  Dist: %.1fm  |  Size: %d".format(dist, size)
 		} else {
 			"Trees: $trees  |  No target"
 		}
 		context.drawTextWithShadow(tr, scanLine, 4, y, Colors.TEXT_MUTED)
 		y += 12
+
+		context.drawTextWithShadow(tr, "Prefer: $mode", 4, y, Colors.TEXT_MUTED)
+		y += 12
+
+		if (InputController.isLocked) {
+			context.drawTextWithShadow(tr, "Locked", 4, y, Colors.ACCENT)
+			y += 12
+		}
 
 		if (target != null) {
 			context.drawTextWithShadow(
