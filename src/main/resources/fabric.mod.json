@@ -1,0 +1,45 @@
+{
+	"schemaVersion": 1,
+	"id": "oriforaginhelpermod",
+	"version": "${version}",
+	"name": "OriForaginHelperMod",
+	"description": "Foraging Helper Made by Me!",
+	"authors": [
+		"Me!"
+	],
+	"contact": {
+		"homepage": "https://fabricmc.net/",
+		"sources": "https://github.com/FabricMC/fabric-example-mod"
+	},
+	"license": "CC0-1.0",
+	"icon": "assets/oriforaginhelpermod/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			{
+				"value": "foraginghelpermod.OriForaginHelperMod",
+				"adapter": "kotlin"
+			}
+		],
+		"fabric-datagen": [
+			{
+				"value": "foraginghelpermod.OriForaginHelperModDataGenerator",
+				"adapter": "kotlin"
+			}
+		],
+		"client": [
+			"foraginghelpermod.ForagingHelperClient"
+		]
+
+	},
+	"mixins": [
+		"oriforaginhelpermod.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.19.3",
+		"minecraft": "~1.21.11",
+		"java": ">=21",
+		"fabric-api": "*",
+		"fabric-language-kotlin": "*"
+	}
+}
