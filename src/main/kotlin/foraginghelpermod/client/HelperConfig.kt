@@ -11,4 +11,6 @@ object HelperConfig {
 	var sneakWhileActive: Boolean = false
 	/** ON = favor small trees (more whole-tree bonuses); OFF = favor larger trees. */
 	var preferSmallTrees: Boolean = true
+	/** Walk toward the selected tree using A* + vanilla movement keys. */
+	var autoWalk: Boolean = true
 }

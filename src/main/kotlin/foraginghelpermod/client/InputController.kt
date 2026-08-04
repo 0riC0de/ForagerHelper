@@ -1,5 +1,6 @@
 package foraginghelpermod.client
 
+import foraginghelpermod.client.path.WalkController
 import foraginghelpermod.client.scan.TreeCluster
 import foraginghelpermod.client.scan.TreeScanner
 import foraginghelpermod.client.scan.TreeScorer
@@ -11,9 +12,8 @@ import net.minecraft.util.math.Vec3d
 import kotlin.math.sqrt
 
 /**
- * Client-tick input loop: opens/closes the options HUD and runs read-only tree scanning.
- * Sticks to the current tree until its logs are gone so bit-by-bit chops don't abort mid-tree.
- * Never sends packets or interacts with blocks/entities.
+ * Client-tick loop: options HUD, tree scan/commit, and A* walk-to-target.
+ * Movement uses vanilla keybinds only (no forged packets).
  */
 object InputController {
 	private const val SCAN_INTERVAL_TICKS = 5
@@ -33,6 +33,9 @@ object InputController {
 
 	val isLocked: Boolean
 		get() = committedPositions.isNotEmpty()
+
+	val walkStatus: String
+		get() = WalkController.status
 
 	private var tickCounter: Int = 0
 	private var committedPositions: Set<BlockPos> = emptySet()
@@ -57,7 +60,7 @@ object InputController {
 		val world = client.world
 		if (player == null || world == null) {
 			HelperConfig.enabled = false
-			clearScan()
+			clearScan(client)
 			return
 		}
 
@@ -66,30 +69,31 @@ object InputController {
 		}
 
 		if (!HelperConfig.enabled) {
-			clearScan()
+			clearScan(client)
 			return
 		}
-		if (client.currentScreen is HelperOptionsScreen) return
+		if (client.currentScreen is HelperOptionsScreen) {
+			WalkController.stop(client)
+			return
+		}
 
 		tickCounter++
-		if (tickCounter < SCAN_INTERVAL_TICKS) return
-		tickCounter = 0
+		if (tickCounter >= SCAN_INTERVAL_TICKS) {
+			tickCounter = 0
+			val eye = player.eyePos
+			val origin = player.blockPos
+			val clusters = TreeScanner.scanClusters(world, origin, eye, TreeScanner.DEFAULT_RADIUS)
+			treeCount = clusters.size
 
-		val eye = player.eyePos
-		val origin = player.blockPos
-		val clusters = TreeScanner.scanClusters(world, origin, eye, TreeScanner.DEFAULT_RADIUS)
-		treeCount = clusters.size
+			val selected = resolveCommittedOrPick(clusters)
+			nearestTree = selected
+			targetLog = selected?.let { TreeScanner.selectTargetLog(it, eye, REACH) }
+		}
 
-		val selected = resolveCommittedOrPick(clusters, eye)
-		nearestTree = selected
-		targetLog = selected?.let { TreeScanner.selectTargetLog(it, eye, REACH) }
+		WalkController.tick(client, targetLog, REACH)
 	}
 
-	/**
-	 * Stay on the overlapping committed cluster if any logs remain;
-	 * otherwise clear and score a new best tree.
-	 */
-	private fun resolveCommittedOrPick(clusters: List<TreeCluster>, eye: Vec3d): TreeCluster? {
+	private fun resolveCommittedOrPick(clusters: List<TreeCluster>): TreeCluster? {
 		if (committedPositions.isNotEmpty()) {
 			val ongoing = clusters.firstOrNull { cluster ->
 				cluster.logs.any { it in committedPositions }
@@ -110,12 +114,13 @@ object InputController {
 		committedPositions = cluster.logs.map { it.toImmutable() }.toHashSet()
 	}
 
-	private fun clearScan() {
+	private fun clearScan(client: MinecraftClient) {
 		nearestTree = null
 		targetLog = null
 		treeCount = 0
 		tickCounter = 0
 		committedPositions = emptySet()
+		WalkController.stop(client)
 	}
 
 	fun nearestDistance(): Double? =

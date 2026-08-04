@@ -57,6 +57,9 @@ object StatusHud {
 			y += 12
 		}
 
+		context.drawTextWithShadow(tr, "Walk: ${InputController.walkStatus}", 4, y, Colors.TEXT_MUTED)
+		y += 12
+
 		if (target != null) {
 			context.drawTextWithShadow(
 				tr,
