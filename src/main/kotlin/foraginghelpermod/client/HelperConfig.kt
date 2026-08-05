@@ -15,4 +15,6 @@ object HelperConfig {
 	var autoWalk: Boolean = false
 	/** Use a held Aspect of the Void only to recover from a failed route or a void fall. */
 	var useAspectOfVoid: Boolean = true
+	/** Draw path, target, and Ether Warp decisions in the world for debugging. */
+	var showPathOverlay: Boolean = true
 }

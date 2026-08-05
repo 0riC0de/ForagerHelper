@@ -1,6 +1,8 @@
 package foraginghelpermod.client
 
 import foraginghelpermod.client.path.WalkController
+import foraginghelpermod.client.path.AStarPathfinder
+import foraginghelpermod.client.path.ChopController
 import foraginghelpermod.client.scan.TreeCluster
 import foraginghelpermod.client.scan.TreeScanner
 import foraginghelpermod.client.scan.TreeScorer
@@ -88,10 +90,16 @@ object InputController {
 
 			val selected = resolveCommittedOrPick(clusters)
 			nearestTree = selected
-			targetLog = selected?.let { TreeScanner.selectTargetLog(it, eye, REACH) }
+			 targetLog = selected?.let { cluster ->
+				TreeScanner.selectTargetLog(cluster, eye, REACH) { log ->
+					AStarPathfinder.hasUsableMiningSpot(world, log, REACH) &&
+						!AStarPathfinder.hasNonLeafMiningBlocker(world, player.blockPos, log)
+				}
+			}
 		}
 
 		WalkController.tick(client, targetLog, REACH)
+		ChopController.tick(client, targetLog, REACH)
 	}
 
 	private fun resolveCommittedOrPick(clusters: List<TreeCluster>): TreeCluster? {
@@ -122,6 +130,11 @@ object InputController {
 		tickCounter = 0
 		committedPositions = emptySet()
 		WalkController.stop(client)
+	}
+
+	fun forgetTarget(pos: BlockPos) {
+		committedPositions = committedPositions - pos
+		if (targetLog == pos) targetLog = null
 	}
 
 	fun nearestDistance(): Double? =

@@ -20,6 +20,7 @@ class HelperOptionsScreen : Screen(Text.translatable("screen.oriforaginhelpermod
 		OptionRow("Prefer Small Trees", "Favor small trees for more whole-tree bonuses", { HelperConfig.preferSmallTrees }, { HelperConfig.preferSmallTrees = it }),
 		OptionRow("Auto Walk", "A* path to the selected tree", { HelperConfig.autoWalk }, { HelperConfig.autoWalk = it }),
 		OptionRow("Void Recovery", "Use held Aspect of the Void when stuck or falling", { HelperConfig.useAspectOfVoid }, { HelperConfig.useAspectOfVoid = it }),
+		OptionRow("Path Overlay", "Show path, target, and Ether Warp decisions", { HelperConfig.showPathOverlay }, { HelperConfig.showPathOverlay = it }),
 		OptionRow("Auto Break", "Break foraging targets automatically", { HelperConfig.autoBreak }, { HelperConfig.autoBreak = it }),
 		OptionRow("Look at Target", "Face the current foraging target", { HelperConfig.lookAtTarget }, { HelperConfig.lookAtTarget = it }),
 		OptionRow("Show Status HUD", "Show ON/OFF status in the corner", { HelperConfig.showStatusHud }, { HelperConfig.showStatusHud = it }),

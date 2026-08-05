@@ -39,6 +39,8 @@ object WalkController {
 		private set
 	var status: String = "Idle"
 		private set
+	var etherWarpTarget: BlockPos? = null
+		private set
 
 	private var goal: BlockPos? = null
 	private var ticksSincePath = 0
@@ -61,11 +63,13 @@ object WalkController {
 	private var lookPlanCurve = 0f
 	private var voidUseCooldown = 0
 	private var fallingTicks = 0
+	private var etherWarpScanCooldown = 0
 
 	fun tick(client: MinecraftClient, targetLog: BlockPos?, reach: Double) {
 		val player = client.player ?: return stop(client)
 		val world = client.world ?: return stop(client)
 		if (voidUseCooldown > 0) voidUseCooldown--
+		if (etherWarpScanCooldown > 0) etherWarpScanCooldown--
 		if (!player.isOnGround && player.velocity.y < -0.2) fallingTicks++ else if (player.isOnGround) fallingTicks = 0
 
 		if (!HelperConfig.autoWalk || targetLog == null) {
@@ -82,9 +86,20 @@ object WalkController {
 		if (eye.squaredDistanceTo(targetCenter) <= reach * reach) {
 			status = "In reach"
 			releaseMovement(client)
-			if (HelperConfig.lookAtTarget) lookAt(player, targetCenter)
+			if (HelperConfig.lookAtTarget) lookAtBlock(player, targetLog)
 			applySneak(client)
 			return
+		}
+
+		val targetHorizontalDistance = horizontalDistance(player, targetCenter)
+		if (targetHorizontalDistance > 57.0 || aspectOfVoidHand(player) == null) etherWarpTarget = null
+		if (HelperConfig.useAspectOfVoid && aspectOfVoidHand(player) != null && targetHorizontalDistance <= 57.0) {
+			if (etherWarpScanCooldown <= 0) {
+				etherWarpTarget = EtherWarpPlanner.findBestTarget(world, Vec3d(player.x, player.y, player.z), targetLog)
+				etherWarpScanCooldown = 5
+			}
+			val warpTarget = etherWarpTarget
+			if (warpTarget != null && tryAspectOfVoid(client, waypointCenter(warpTarget, warpTarget.y + 1.0), "Ether Warp")) return
 		}
 
 		ticksSincePath++
@@ -100,7 +115,7 @@ object WalkController {
 			ticksSincePath = 0
 			stuckTicks = 0
 			val start = player.blockPos
-			val result = AStarPathfinder.findPath(world, start, targetLog, reach)
+			val result = AStarPathfinder.findPath(world, start, targetLog, reach, maxHorizontalRange = 40)
 			if (result == null || result.waypoints.isEmpty()) {
 				if (tryAspectOfVoid(client, targetCenter, "No safe path")) return
 				status = "No path"
@@ -130,7 +145,7 @@ object WalkController {
 		if (pathIndex >= path.size) {
 			status = "Arrived"
 			releaseMovement(client)
-			if (HelperConfig.lookAtTarget) lookAt(player, targetCenter)
+			if (HelperConfig.lookAtTarget) lookAtBlock(player, targetLog)
 			applySneak(client)
 			return
 		}
@@ -194,6 +209,8 @@ object WalkController {
 		lookPlanTargetPitch = Float.NaN
 		lookPlanStep = 0
 		lookPlanSteps = 1
+		etherWarpTarget = null
+		etherWarpScanCooldown = 0
 		status = "Idle"
 
 		if (client != null) {
@@ -248,6 +265,12 @@ object WalkController {
 
 	private fun waypointCenter(pos: BlockPos, y: Double): Vec3d =
 		Vec3d(pos.x + 0.5, y, pos.z + 0.5)
+
+	private fun horizontalDistance(player: ClientPlayerEntity, target: Vec3d): Double {
+		val dx = player.x - target.x
+		val dz = player.z - target.z
+		return sqrt(dx * dx + dz * dz)
+	}
 
 	private fun hasNearbyGround(world: ClientWorld, feet: BlockPos, maxDepth: Int): Boolean {
 		for (depth in 1..maxDepth) {
@@ -306,7 +329,7 @@ object WalkController {
 			lastPitch = MathHelper.clamp(player.pitch, -90f, 90f)
 			initializedLook = true
 		}
-		if (precise) targetPitch = MathHelper.clamp(targetPitch, -60f, 45f)
+		if (precise) targetPitch = MathHelper.clamp(targetPitch, -89f, 89f)
 
 		val newTarget = lookPlanTargetYaw.isNaN() ||
 			abs(MathHelper.wrapDegrees(targetYaw - lookPlanTargetYaw)) > 0.35f ||
@@ -379,7 +402,35 @@ object WalkController {
 		options.sprintKey.setPressed((parkour && parkourAligned) || (!parkour && abs(yawDiff) < 35f))
 	}
 
-	private fun lookAt(player: ClientPlayerEntity, point: Vec3d) {
-		lookAtNaturally(player, point, precise = true)
+	fun lookAtBlock(player: ClientPlayerEntity, block: BlockPos) {
+		lookAtNaturally(player, miningLookPoint(player, block), precise = true)
+	}
+
+	/** Small corrective input used while the chop action is settling or stalled. */
+	fun nudgeForMining(client: MinecraftClient, target: BlockPos, direction: Int) {
+		val player = client.player ?: return
+		val dx = target.x + 0.5 - player.x
+		val dz = target.z + 0.5 - player.z
+		val targetYaw = MathHelper.wrapDegrees(Math.toDegrees(atan2(-dx, dz)).toFloat())
+		val yawDiff = MathHelper.wrapDegrees(targetYaw - player.yaw)
+		val options = client.options
+		options.forwardKey.setPressed(direction == 0 && abs(yawDiff) < 32f)
+		options.backKey.setPressed(false)
+		options.leftKey.setPressed(direction < 0)
+		options.rightKey.setPressed(direction > 0)
+		options.sprintKey.setPressed(false)
+	}
+
+	private fun miningLookPoint(player: ClientPlayerEntity, block: BlockPos): Vec3d {
+		val centerX = block.x + 0.5
+		val centerZ = block.z + 0.5
+		// A log above the player is mined through its underside. Keeping the
+		// point slightly inside the face also avoids aiming at an adjacent block.
+		val y = when {
+			player.eyeY < block.y -> block.y + 0.04
+			player.eyeY > block.y + 1.0 -> block.y + 0.96
+			else -> block.y + 0.5
+		}
+		return humanizeLookPoint(Vec3d(centerX, y, centerZ))
 	}
 }

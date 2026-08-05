@@ -32,7 +32,12 @@ object AStarPathfinder {
 		maxHorizontalRange: Int = 28,
 	): PathResult? {
 		val startStand = resolveStandPos(world, start) ?: return null
-		val goals = collectGoalStands(world, goal, reach, maxHorizontalRange)
+		val planningGoal = localPlanningGoal(startStand, goal, maxHorizontalRange)
+		val goals = if (planningGoal != goal) {
+			collectLocalGoals(world, planningGoal)
+		} else {
+			collectGoalStands(world, goal, reach, maxHorizontalRange)
+		}
 		if (goals.isEmpty()) return null
 		if (startStand in goals) return PathResult(listOf(startStand))
 
@@ -79,6 +84,23 @@ object AStarPathfinder {
 		return !groundState.getCollisionShape(world, ground).isEmpty
 	}
 
+	fun hasUsableMiningSpot(world: ClientWorld, goal: BlockPos, reach: Double): Boolean {
+		if (world.getBlockState(goal).isAir || world.getBlockState(goal).getHardness(world, goal) < 0f) return false
+		val radius = (reach + 1.0).toInt()
+		for (dx in -radius..radius) {
+			for (dz in -radius..radius) {
+				for (dy in -3..3) {
+					val feet = goal.add(dx, dy, dz)
+					if (!canStandAt(world, feet)) continue
+					val eye = Vec3d(feet.x + 0.5, feet.y + 1.62, feet.z + 0.5)
+					val center = Vec3d(goal.x + 0.5, goal.y + 0.5, goal.z + 0.5)
+					if (eye.squaredDistanceTo(center) <= reach * reach && hasMiningLineOfSight(world, feet, goal)) return true
+				}
+			}
+		}
+		return false
+	}
+
 	/**
 	 * Returns true when an edge is a real gap jump, rather than a smoothed walking segment.
 	 * The controller uses this to hold jump and sprint for the whole jump.
@@ -120,7 +142,7 @@ object AStarPathfinder {
 
 		for (dx in -r..r) {
 			for (dz in -r..r) {
-				for (dy in -2..2) {
+					for (dy in -3..3) {
 					val feet = BlockPos(goal.x + dx, goal.y + dy, goal.z + dz)
 					if (!canStandAt(world, feet)) continue
 					val stand = Vec3d(feet.x + 0.5, feet.y + 1.0, feet.z + 0.5)
@@ -132,15 +154,15 @@ object AStarPathfinder {
 				}
 			}
 		}
-		// Prefer standing below a solid overhead block when the tree provides one,
-		// but keep an uncovered fallback for trees in open terrain.
-		return if (coveredGoals.isNotEmpty()) coveredGoals else visibleGoals
+		// Keep every visible elevation layer. Selecting only covered positions here
+		// could discard the highest reachable layer when the tree has mixed cover.
+		return visibleGoals
 	}
 
 	private fun hasOverheadCover(world: ClientWorld, feet: BlockPos): Boolean =
 		!isAirLike(world, feet.up(2))
 
-	private fun hasMiningLineOfSight(world: ClientWorld, feet: BlockPos, goal: BlockPos): Boolean {
+	fun hasMiningLineOfSight(world: ClientWorld, feet: BlockPos, goal: BlockPos): Boolean {
 		val from = Vec3d(feet.x + 0.5, feet.y + 1.62, feet.z + 0.5)
 		val to = Vec3d(goal.x + 0.5, goal.y + 0.5, goal.z + 0.5)
 		val steps = maxOf(abs(goal.x - feet.x), abs(goal.y - feet.y), abs(goal.z - feet.z)) * 3
@@ -155,6 +177,48 @@ object AStarPathfinder {
 			if (pos != goal && !isAirLike(world, pos)) return false
 		}
 		return true
+	}
+
+	/** True when a solid, non-leaf block is between the player and the log. */
+	fun hasNonLeafMiningBlocker(world: ClientWorld, feet: BlockPos, goal: BlockPos): Boolean {
+		val from = Vec3d(feet.x + 0.5, feet.y + 1.62, feet.z + 0.5)
+		val to = Vec3d(goal.x + 0.5, goal.y + 0.5, goal.z + 0.5)
+		val steps = maxOf(abs(goal.x - feet.x), abs(goal.y - feet.y), abs(goal.z - feet.z)) * 3
+		for (i in 1..steps) {
+			val t = i.toDouble() / steps
+			val pos = BlockPos(
+				kotlin.math.floor(from.x + (to.x - from.x) * t).toInt(),
+				kotlin.math.floor(from.y + (to.y - from.y) * t).toInt(),
+				kotlin.math.floor(from.z + (to.z - from.z) * t).toInt(),
+			)
+			if (pos == goal) continue
+			val state = world.getBlockState(pos)
+			if (!state.getCollisionShape(world, pos).isEmpty && !TreeScanner.isLeafLike(state)) return true
+		}
+		return false
+	}
+
+	private fun localPlanningGoal(start: BlockPos, goal: BlockPos, maxRange: Int): BlockPos {
+		val dx = goal.x - start.x
+		val dz = goal.z - start.z
+		val distance = maxOf(abs(dx), abs(dz))
+		if (distance <= maxRange - 8) return goal
+		val step = (maxRange - 8).coerceAtLeast(8)
+		val scale = step.toDouble() / distance.toDouble()
+		return start.add((dx * scale).toInt(), 0, (dz * scale).toInt()).toImmutable()
+	}
+
+	private fun collectLocalGoals(world: ClientWorld, center: BlockPos): Set<BlockPos> {
+		val goals = HashSet<BlockPos>()
+		for (dx in -2..2) {
+			for (dz in -2..2) {
+				for (dy in -2..2) {
+					val feet = center.add(dx, dy, dz)
+					if (canStandAt(world, feet)) goals.add(feet.toImmutable())
+				}
+			}
+		}
+		return goals
 	}
 
 	private fun neighbors(

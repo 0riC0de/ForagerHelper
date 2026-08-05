@@ -76,10 +76,16 @@ object TreeScanner {
 		cluster: TreeCluster,
 		from: Vec3d,
 		reachDistance: Double,
-	): BlockPos {
+		isUsable: (BlockPos) -> Boolean = { true },
+	): BlockPos? {
 		val reachSq = reachDistance * reachDistance
-		val inReach = cluster.logs.filter { squaredDistance(from, it) <= reachSq }
-		val pool = inReach.ifEmpty { cluster.logs }
+		val usable = cluster.logs.filter(isUsable)
+		// Never fall back to a covered log. A non-leaf blocker must be dealt with
+		// by a different target/path decision instead of making the bot stare at it.
+		val candidates = usable
+		if (candidates.isEmpty()) return null
+		val inReach = candidates.filter { squaredDistance(from, it) <= reachSq }
+		val pool = inReach.ifEmpty { candidates }
 
 		return pool.minWith(
 			compareBy<BlockPos> { squaredDistance(from, it) }
@@ -94,6 +100,12 @@ object TreeScanner {
 		// Fallback for custom server blocks that aren't tagged as vanilla logs.
 		val path = Registries.BLOCK.getId(state.block).path
 		return path.contains("log") || path.contains("stem") || path.contains("hyphae")
+	}
+
+	fun isLeafLike(state: BlockState): Boolean {
+		if (state.isIn(BlockTags.LEAVES)) return true
+		val path = Registries.BLOCK.getId(state.block).path.lowercase()
+		return path.contains("leaves") || path.contains("leaf")
 	}
 
 	private fun floodFill(
