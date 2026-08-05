@@ -129,10 +129,13 @@ object WalkController {
 		val targetPoint = Vec3d(waypoint.x + 0.5, player.y, waypoint.z + 0.5)
 		val targetYaw = yawTo(player, targetPoint)
 		val yawDiff = MathHelper.wrapDegrees(targetYaw - player.yaw)
+		val movementStart = if (pathIndex > 0) path[pathIndex - 1] else player.blockPos
+		val parkour = AStarPathfinder.isParkourJump(world, movementStart, waypoint)
+		val parkourAligned = abs(yawDiff) < 18f
 		turnToward(player, targetYaw)
-		setMovement(client, yawDiff)
+		setMovement(client, yawDiff, parkour, parkourAligned)
 
-		val needJump = waypoint.y > player.blockPos.y && player.isOnGround
+		val needJump = ((parkour && parkourAligned) || waypoint.y > player.blockPos.y) && player.isOnGround
 		client.options.jumpKey.setPressed(needJump)
 
 		applySneak(client)
@@ -250,14 +253,14 @@ object WalkController {
 	private fun yawTo(player: ClientPlayerEntity, point: Vec3d): Float =
 		MathHelper.wrapDegrees(Math.toDegrees(atan2(-(point.x - player.x), point.z - player.z)).toFloat())
 
-	private fun setMovement(client: MinecraftClient, yawDiff: Float) {
+	private fun setMovement(client: MinecraftClient, yawDiff: Float, parkour: Boolean, parkourAligned: Boolean) {
 		val options = client.options
 		// Forward movement is retained for normal walking; strafe input prevents wide arcs during turns.
-		options.forwardKey.setPressed(true)
+		options.forwardKey.setPressed(!parkour || parkourAligned)
 		options.backKey.setPressed(false)
-		options.leftKey.setPressed(yawDiff < -55f)
-		options.rightKey.setPressed(yawDiff > 55f)
-		options.sprintKey.setPressed(abs(yawDiff) < 35f)
+		options.leftKey.setPressed(!parkour && yawDiff < -55f)
+		options.rightKey.setPressed(!parkour && yawDiff > 55f)
+		options.sprintKey.setPressed((parkour && parkourAligned) || (!parkour && abs(yawDiff) < 35f))
 	}
 
 	private fun lookAt(player: ClientPlayerEntity, point: Vec3d) {

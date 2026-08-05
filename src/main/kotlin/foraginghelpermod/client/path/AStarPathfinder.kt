@@ -15,6 +15,8 @@ import kotlin.math.sqrt
  */
 object AStarPathfinder {
 	private const val MAX_NODES = 6000
+	private const val MAX_SAFE_DROP = 3
+	private const val MAX_PARKOUR_DISTANCE = 3
 	private val CARDINALS = arrayOf(Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST)
 
 	data class PathResult(val waypoints: List<BlockPos>)
@@ -77,6 +79,18 @@ object AStarPathfinder {
 		return !groundState.getCollisionShape(world, ground).isEmpty
 	}
 
+	/**
+	 * Returns true when an edge is a real gap jump, rather than a smoothed walking segment.
+	 * The controller uses this to hold jump and sprint for the whole jump.
+	 */
+	fun isParkourJump(world: ClientWorld, from: BlockPos, to: BlockPos): Boolean {
+		val dx = to.x - from.x
+		val dz = to.z - from.z
+		val distance = abs(dx) + abs(dz)
+		if (distance !in 2..MAX_PARKOUR_DISTANCE || (dx != 0 && dz != 0)) return false
+		return parkourLanding(world, from, to, dx.coerceIn(-1, 1), dz.coerceIn(-1, 1)) == to
+	}
+
 	private fun isAirLike(world: ClientWorld, pos: BlockPos): Boolean {
 		val state = world.getBlockState(pos)
 		if (TreeScanner.isLogLike(state)) return false
@@ -130,15 +144,32 @@ object AStarPathfinder {
 			if (tooFar(flat, origin, maxRange)) continue
 			if (canStandAt(world, flat)) {
 				result.add(flat.toImmutable() to 1.0)
-				continue
+			} else {
+				// Baritone treats an ascent, a descent, and a fall as separate moves.
+				// Keep the same distinction so the search does not blindly walk into height changes.
+				val up = flat.up()
+				if (!tooFar(up, origin, maxRange) && canStandAt(world, up) &&
+					isAirLike(world, pos.up(2))) {
+					result.add(up.toImmutable() to 1.45)
+				}
+
+				for (drop in 1..MAX_SAFE_DROP) {
+					val down = flat.down(drop)
+					if (tooFar(down, origin, maxRange)) continue
+					if (canStandAt(world, down) && clearFallColumn(world, flat, down)) {
+						result.add(down.toImmutable() to (1.2 + drop * 0.8))
+						break
+					}
+				}
 			}
-			val up = flat.up()
-			if (!tooFar(up, origin, maxRange) && canStandAt(world, up) && isAirLike(world, pos.up())) {
-				result.add(up.toImmutable() to 1.4)
-			}
-			val down = flat.down()
-			if (!tooFar(down, origin, maxRange) && canStandAt(world, down) && isAirLike(world, flat)) {
-				result.add(down.toImmutable() to 1.4)
+
+			val jump = flat.add(dir.vector.x * (MAX_PARKOUR_DISTANCE - 1), 0, dir.vector.z * (MAX_PARKOUR_DISTANCE - 1))
+			if (!canStandAt(world, flat) && !tooFar(jump, origin, maxRange)) {
+				val landing = parkourLanding(world, pos, jump, dir.vector.x, dir.vector.z)
+				if (landing != null) {
+					val jumpDistance = abs(landing.x - pos.x) + abs(landing.z - pos.z)
+					result.add(landing.toImmutable() to (jumpDistance * 1.15 + 1.8))
+				}
 			}
 		}
 
@@ -153,6 +184,30 @@ object AStarPathfinder {
 			}
 		}
 		return result
+	}
+
+	private fun parkourLanding(world: ClientWorld, from: BlockPos, to: BlockPos, dx: Int, dz: Int): BlockPos? {
+		val distance = abs(to.x - from.x) + abs(to.z - from.z)
+		if (distance !in 2..MAX_PARKOUR_DISTANCE || (dx != 0 && dz != 0)) return null
+		if (!isAirLike(world, from.up(2))) return null
+
+		// The takeoff and every part of the gap need two blocks of headroom.
+		for (i in 1 until distance) {
+			val gap = from.add(dx * i, 0, dz * i)
+			if (!isAirLike(world, gap) || !isAirLike(world, gap.up())) return null
+		}
+
+		// A landing may be flat or one block higher, matching Minecraft's normal jump.
+		if (canStandAt(world, to)) return to
+		if (canStandAt(world, to.up()) && isAirLike(world, to.up(2))) return to.up()
+		return null
+	}
+
+	private fun clearFallColumn(world: ClientWorld, fromColumn: BlockPos, landing: BlockPos): Boolean {
+		for (y in landing.y + 1..fromColumn.y + 1) {
+			if (!isAirLike(world, BlockPos(fromColumn.x, y, fromColumn.z))) return false
+		}
+		return true
 	}
 
 	/** Keeps the farthest reachable node in each straight section, like MightyMiner's Bresenham smoothing. */
