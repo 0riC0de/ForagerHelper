@@ -65,14 +65,20 @@ object WalkController {
 	private var fallingTicks = 0
 	private var etherWarpScanCooldown = 0
 
-	fun tick(client: MinecraftClient, targetLog: BlockPos?, reach: Double) {
+	fun tick(
+		client: MinecraftClient,
+		targetLog: BlockPos?,
+		reach: Double,
+		forceRoute: Boolean = false,
+		exactDestination: Boolean = false,
+	) {
 		val player = client.player ?: return stop(client)
 		val world = client.world ?: return stop(client)
 		if (voidUseCooldown > 0) voidUseCooldown--
 		if (etherWarpScanCooldown > 0) etherWarpScanCooldown--
 		if (!player.isOnGround && player.velocity.y < -0.2) fallingTicks++ else if (player.isOnGround) fallingTicks = 0
 
-		if (!HelperConfig.autoWalk || targetLog == null) {
+		if ((!HelperConfig.autoWalk && !forceRoute) || targetLog == null) {
 			stop(client)
 			return
 		}
@@ -83,7 +89,8 @@ object WalkController {
 		}
 
 		val eye = player.eyePos
-		if (eye.squaredDistanceTo(targetCenter) <= reach * reach) {
+		val exactDestinationReached = !exactDestination || player.blockPos == targetLog
+		if (exactDestinationReached && eye.squaredDistanceTo(targetCenter) <= reach * reach) {
 			status = "In reach"
 			releaseMovement(client)
 			if (HelperConfig.lookAtTarget) lookAtBlock(player, targetLog)
@@ -115,7 +122,11 @@ object WalkController {
 			ticksSincePath = 0
 			stuckTicks = 0
 			val start = player.blockPos
-			val result = AStarPathfinder.findPath(world, start, targetLog, reach, maxHorizontalRange = 40)
+			val result = AStarPathfinder.findPath(
+				world, start, targetLog, reach,
+				maxHorizontalRange = 40,
+				exactDestination = exactDestination,
+			)
 			if (result == null || result.waypoints.isEmpty()) {
 				if (tryAspectOfVoid(client, targetCenter, "No safe path")) return
 				status = "No path"
@@ -140,6 +151,18 @@ object WalkController {
 			} else {
 				break
 			}
+		}
+
+		if (pathIndex >= path.size && exactDestination && player.blockPos != targetLog) {
+			// The pathfinder intentionally returns a local segment for long routes.
+			// Clear it and let the next tick calculate the next segment from the
+			// player's new position.
+			path = emptyList()
+			pathIndex = 0
+			ticksSincePath = REPATH_INTERVAL
+			releaseMovement(client)
+			status = "Planning next route"
+			return
 		}
 
 		if (pathIndex >= path.size) {

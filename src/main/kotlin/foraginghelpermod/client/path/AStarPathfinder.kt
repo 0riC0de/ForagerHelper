@@ -30,11 +30,14 @@ object AStarPathfinder {
 		goal: BlockPos,
 		reach: Double,
 		maxHorizontalRange: Int = 28,
+		exactDestination: Boolean = false,
 	): PathResult? {
 		val startStand = resolveStandPos(world, start) ?: return null
 		val planningGoal = localPlanningGoal(startStand, goal, maxHorizontalRange)
 		val goals = if (planningGoal != goal) {
 			collectLocalGoals(world, planningGoal)
+		} else if (exactDestination) {
+			if (canStandAt(world, goal)) setOf(goal.toImmutable()) else emptySet()
 		} else {
 			collectGoalStands(world, goal, reach, maxHorizontalRange)
 		}

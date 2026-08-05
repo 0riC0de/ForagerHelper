@@ -80,6 +80,12 @@ object InputController {
 			return
 		}
 
+		val manualGoal = HelperConfig.manualRouteGoal
+		if (manualGoal != null) {
+			WalkController.tick(client, manualGoal, REACH, forceRoute = true, exactDestination = true)
+			return
+		}
+
 		tickCounter++
 		if (tickCounter >= SCAN_INTERVAL_TICKS) {
 			tickCounter = 0

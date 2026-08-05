@@ -1,6 +1,7 @@
 package foraginghelpermod
 
 import foraginghelpermod.client.InputController
+import foraginghelpermod.client.ManualRouteCommand
 import foraginghelpermod.client.ModKeyBindings
 import foraginghelpermod.client.hud.StatusHud
 import foraginghelpermod.client.hud.DebugWorldOverlay
@@ -10,6 +11,7 @@ class ForagingHelperClient : ClientModInitializer {
 	override fun onInitializeClient() {
 		ModKeyBindings.register()
 		InputController.register()
+		ManualRouteCommand.register()
 		StatusHud.register()
 		DebugWorldOverlay.register()
 	}

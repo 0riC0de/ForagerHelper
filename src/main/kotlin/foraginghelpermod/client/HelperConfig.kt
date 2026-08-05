@@ -1,5 +1,7 @@
 package foraginghelpermod.client
 
+import net.minecraft.util.math.BlockPos
+
 /**
  * Client-side foraging helper options (checkbox state for the options HUD).
  */
@@ -17,4 +19,6 @@ object HelperConfig {
 	var useAspectOfVoid: Boolean = true
 	/** Draw path, target, and Ether Warp decisions in the world for debugging. */
 	var showPathOverlay: Boolean = true
+	/** Manual destination set by /forageroute x y z. */
+	var manualRouteGoal: BlockPos? = null
 }
