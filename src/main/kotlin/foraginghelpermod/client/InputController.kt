@@ -72,7 +72,8 @@ object InputController {
 			clearScan(client)
 			return
 		}
-		if (client.currentScreen is HelperOptionsScreen) {
+		if (client.currentScreen != null) {
+			// Never keep synthetic movement active while any GUI is open.
 			WalkController.stop(client)
 			return
 		}

@@ -3,26 +3,29 @@ package foraginghelpermod.client.path
 import foraginghelpermod.client.HelperConfig
 import net.minecraft.client.MinecraftClient
 import net.minecraft.client.network.ClientPlayerEntity
+import net.minecraft.client.option.KeyBinding
+import net.minecraft.client.util.InputUtil
 import net.minecraft.util.math.BlockPos
 import net.minecraft.util.math.MathHelper
 import net.minecraft.util.math.Vec3d
+import org.lwjgl.glfw.GLFW
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.sqrt
 
 /**
  * Follows an A* path by pressing vanilla movement keys and rotating the player.
- * Movement packets are whatever Minecraft sends from normal input — no forged packets.
+ * Prevents "dead keys" by checking physical GLFW hardware states on release.
  */
 object WalkController {
 	private const val WAYPOINT_REACH = 0.75
 	private const val REPATH_INTERVAL = 20
 	private const val STUCK_TICKS = 25
 	private const val STUCK_MOVE_SQ = 0.04
-	private const val LOOK_AHEAD = 5  // Look ahead 5 waypoints for natural head movement
-	private const val PITCH_SMOOTHING = 0.02f  // Very slow pitch smoothing for human-like look
-	private const val YAW_SMOOTHING = 0.03f  // Very slow yaw smoothing for natural head turning
-	private const val TARGET_UPDATE_DELAY = 5  // Update look target every 15 ticks to avoid snappy changes
+	private const val LOOK_AHEAD = 5
+	private const val PITCH_SMOOTHING = 0.02f
+	private const val MAX_TURN_PER_TICK = 12.0f
+	private const val TARGET_UPDATE_DELAY = 5
 
 	var path: List<BlockPos> = emptyList()
 		private set
@@ -36,10 +39,11 @@ object WalkController {
 	private var stuckTicks = 0
 	private var lastPos: Vec3d? = null
 	private var holdingKeys = false
-	private var lastPitch = 0f  // Track last pitch for smooth transitions
-	private var lastYaw = 0f  // Track last yaw for smooth transitions
-	private var lastLookPoint: Vec3d? = null  // Cache look target to avoid snappy changes
-	private var ticksSinceLastLook = 0  // Track ticks since last look update
+	private var lastPitch = 0f
+	private var lastYaw = 0f
+	private var lastLookPoint: Vec3d? = null
+	private var ticksSinceLastLook = 0
+	private var initializedLook = false
 
 	fun tick(client: MinecraftClient, targetLog: BlockPos?, reach: Double) {
 		val player = client.player ?: return stop(client)
@@ -63,10 +67,10 @@ object WalkController {
 		ticksSincePath++
 		val needRepath =
 			goal != targetLog ||
-				path.isEmpty() ||
-				pathIndex >= path.size ||
-				ticksSincePath >= REPATH_INTERVAL ||
-				stuckTicks >= STUCK_TICKS
+					path.isEmpty() ||
+					pathIndex >= path.size ||
+					ticksSincePath >= REPATH_INTERVAL ||
+					stuckTicks >= STUCK_TICKS
 
 		if (needRepath) {
 			goal = targetLog.toImmutable()
@@ -108,34 +112,29 @@ object WalkController {
 		}
 
 		val waypoint = path[pathIndex]
-	
-		// Look ahead to a point further down the path for natural head movement
 		val lookAheadIndex = minOf(pathIndex + LOOK_AHEAD, path.size - 1)
 		val lookAheadBlock = path[lookAheadIndex]
 		val newLookPoint = Vec3d(lookAheadBlock.x + 0.5, lookAheadBlock.y + 1.5, lookAheadBlock.z + 0.5)
-	
-		// Update look target only every TARGET_UPDATE_DELAY ticks to avoid snappy target switching
+
 		ticksSinceLastLook++
 		if (ticksSinceLastLook >= TARGET_UPDATE_DELAY) {
 			lastLookPoint = newLookPoint
 			ticksSinceLastLook = 0
 		}
-		
+
 		if (lastLookPoint != null) {
 			lookAtNaturally(player, lastLookPoint!!)
 		}
 
-		val options = client.options
-		
-		// Keep keys pressed continuously - Minecraft handles the server mod compatibility
-		options.forwardKey.setPressed(true)
-		options.sprintKey.setPressed(true)
-		options.leftKey.setPressed(false)
-		options.rightKey.setPressed(false)
-		options.backKey.setPressed(false)
+		val targetPoint = Vec3d(waypoint.x + 0.5, player.y, waypoint.z + 0.5)
+		val targetYaw = yawTo(player, targetPoint)
+		val yawDiff = MathHelper.wrapDegrees(targetYaw - player.yaw)
+		turnToward(player, targetYaw)
+		setMovement(client, yawDiff)
 
-		val needJump = waypoint.y > player.blockPos.y + 1 && player.isOnGround
-		options.jumpKey.setPressed(needJump)
+		val needJump = waypoint.y > player.blockPos.y && player.isOnGround
+		client.options.jumpKey.setPressed(needJump)
+
 		applySneak(client)
 		holdingKeys = true
 
@@ -162,25 +161,53 @@ object WalkController {
 		lastYaw = 0f
 		lastLookPoint = null
 		ticksSinceLastLook = 0
+		initializedLook = false
 		status = "Idle"
-		if (client != null) releaseMovement(client)
+
+		if (client != null) {
+			releaseMovement(client)
+		}
 	}
 
 	private fun releaseMovement(client: MinecraftClient) {
-		if (!holdingKeys && !HelperConfig.sneakWhileActive) {
-			// Still clear in case keys were left pressed.
-		}
 		val options = client.options
-		options.forwardKey.setPressed(false)
-		options.backKey.setPressed(false)
-		options.leftKey.setPressed(false)
-		options.rightKey.setPressed(false)
-		options.jumpKey.setPressed(false)
-		options.sprintKey.setPressed(false)
+
+		// Restore physical hardware state instead of just setting to false
+		restorePhysicalKeyState(client, options.forwardKey)
+		restorePhysicalKeyState(client, options.backKey)
+		restorePhysicalKeyState(client, options.leftKey)
+		restorePhysicalKeyState(client, options.rightKey)
+		restorePhysicalKeyState(client, options.jumpKey)
+		restorePhysicalKeyState(client, options.sprintKey)
+
 		if (!HelperConfig.sneakWhileActive) {
-			options.sneakKey.setPressed(false)
+			restorePhysicalKeyState(client, options.sneakKey)
 		}
+
 		holdingKeys = false
+	}
+
+	/**
+	 * Polls the physical GLFW hardware state to ensure keys are not left "dead"
+	 * if the user is holding them on their physical keyboard when the bot stops.
+	 */
+	private fun restorePhysicalKeyState(client: MinecraftClient, keyBinding: KeyBinding) {
+		try {
+			val key = InputUtil.fromTranslationKey(keyBinding.boundKeyTranslationKey)
+			val window = client.window.handle
+
+			val isPhysicallyPressed = if (key.category == InputUtil.Type.MOUSE) {
+				GLFW.glfwGetMouseButton(window, key.code) == GLFW.GLFW_PRESS
+			} else {
+				// Directly use GLFW instead of InputUtil.isKeyPressed
+				GLFW.glfwGetKey(window, key.code) == GLFW.GLFW_PRESS
+			}
+
+			keyBinding.setPressed(isPhysicallyPressed)
+		} catch (e: Exception) {
+			// Fallback to unpressed if mapping retrieval fails
+			keyBinding.setPressed(false)
+		}
 	}
 
 	private fun applySneak(client: MinecraftClient) {
@@ -192,28 +219,45 @@ object WalkController {
 		val dy = point.y - player.eyeY
 		val dz = point.z - player.z
 		val horiz = sqrt(dx * dx + dz * dz)
-		
-		// Calculate target yaw and pitch
-		var targetYaw = MathHelper.wrapDegrees(Math.toDegrees(atan2(-dx, dz)).toFloat())
+
+		val targetYaw = MathHelper.wrapDegrees(Math.toDegrees(atan2(-dx, dz)).toFloat())
 		var targetPitch = MathHelper.clamp(Math.toDegrees(-atan2(dy, horiz)).toFloat(), -90f, 90f)
-		
-		// Clamp pitch to eye level range for human-like looking (not straight down)
+
 		targetPitch = MathHelper.clamp(targetPitch, -35f, 30f)
-		
-		// Handle yaw wrapping for shortest path
-		var yawDiff = targetYaw - lastYaw
-		if (yawDiff > 180f) yawDiff -= 360f
-		if (yawDiff < -180f) yawDiff += 360f
-		
-		// Very slowly transition both yaw and pitch for extremely fluid head movement
-		val smoothedYaw = lastYaw + yawDiff * YAW_SMOOTHING
-		val smoothedPitch = lastPitch + (targetPitch - lastPitch) * PITCH_SMOOTHING
-		
+
+		if (!initializedLook) {
+			lastYaw = player.yaw
+			lastPitch = player.pitch
+			initializedLook = true
+		}
+		val yawDiff = MathHelper.wrapDegrees(targetYaw - lastYaw)
+		val yawStep = MathHelper.clamp(yawDiff, -MAX_TURN_PER_TICK, MAX_TURN_PER_TICK)
+		val smoothedYaw = lastYaw + yawStep
+		val smoothedPitch = lastPitch + (targetPitch - lastPitch) * 0.18f
+
 		lastYaw = smoothedYaw
 		lastPitch = smoothedPitch
-		
+
 		player.yaw = smoothedYaw
 		player.pitch = smoothedPitch
+	}
+
+	private fun turnToward(player: ClientPlayerEntity, targetYaw: Float) {
+		val diff = MathHelper.wrapDegrees(targetYaw - player.yaw)
+		player.yaw += MathHelper.clamp(diff, -MAX_TURN_PER_TICK, MAX_TURN_PER_TICK)
+	}
+
+	private fun yawTo(player: ClientPlayerEntity, point: Vec3d): Float =
+		MathHelper.wrapDegrees(Math.toDegrees(atan2(-(point.x - player.x), point.z - player.z)).toFloat())
+
+	private fun setMovement(client: MinecraftClient, yawDiff: Float) {
+		val options = client.options
+		// Forward movement is retained for normal walking; strafe input prevents wide arcs during turns.
+		options.forwardKey.setPressed(true)
+		options.backKey.setPressed(false)
+		options.leftKey.setPressed(yawDiff < -55f)
+		options.rightKey.setPressed(yawDiff > 55f)
+		options.sprintKey.setPressed(abs(yawDiff) < 35f)
 	}
 
 	private fun lookAt(player: ClientPlayerEntity, point: Vec3d) {

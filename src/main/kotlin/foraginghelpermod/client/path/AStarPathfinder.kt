@@ -46,15 +46,14 @@ object AStarPathfinder {
 			expansions++
 
 			if (current.pos in goals) {
-				return PathResult(reconstruct(current))
+				return PathResult(smoothPath(world, reconstruct(current)))
 			}
 
 			val currentKey = current.pos.asLong()
 			val knownG = bestG[currentKey] ?: continue
 			if (current.g > knownG + 1e-6) continue
 
-			for (neighbor in neighbors(world, current.pos, startStand, maxHorizontalRange)) {
-				val stepCost = if (neighbor.y == current.pos.y) 1.0 else 1.41
+			for ((neighbor, stepCost) in neighbors(world, current.pos, startStand, maxHorizontalRange)) {
 				val g = current.g + stepCost
 				val key = neighbor.asLong()
 				val prev = bestG[key]
@@ -124,25 +123,71 @@ object AStarPathfinder {
 		pos: BlockPos,
 		origin: BlockPos,
 		maxRange: Int,
-	): List<BlockPos> {
-		val result = ArrayList<BlockPos>(12)
+	): List<Pair<BlockPos, Double>> {
+		val result = ArrayList<Pair<BlockPos, Double>>(16)
 		for (dir in CARDINALS) {
 			val flat = pos.offset(dir)
 			if (tooFar(flat, origin, maxRange)) continue
 			if (canStandAt(world, flat)) {
-				result.add(flat.toImmutable())
+				result.add(flat.toImmutable() to 1.0)
 				continue
 			}
 			val up = flat.up()
 			if (!tooFar(up, origin, maxRange) && canStandAt(world, up) && isAirLike(world, pos.up())) {
-				result.add(up.toImmutable())
+				result.add(up.toImmutable() to 1.4)
 			}
 			val down = flat.down()
 			if (!tooFar(down, origin, maxRange) && canStandAt(world, down) && isAirLike(world, flat)) {
-				result.add(down.toImmutable())
+				result.add(down.toImmutable() to 1.4)
+			}
+		}
+
+		// Diagonals reduce the staircase/zigzag paths produced by cardinal-only A*.
+		for ((dx, dz) in arrayOf(-1 to -1, -1 to 1, 1 to -1, 1 to 1)) {
+			val diagonal = pos.add(dx, 0, dz)
+			val sideA = pos.add(dx, 0, 0)
+			val sideB = pos.add(0, 0, dz)
+			if (!tooFar(diagonal, origin, maxRange) && canStandAt(world, diagonal) &&
+				canStandAt(world, sideA) && canStandAt(world, sideB)) {
+				result.add(diagonal.toImmutable() to 1.414)
 			}
 		}
 		return result
+	}
+
+	/** Keeps the farthest reachable node in each straight section, like MightyMiner's Bresenham smoothing. */
+	private fun smoothPath(world: ClientWorld, raw: List<BlockPos>): List<BlockPos> {
+		if (raw.size < 3) return raw
+		val result = ArrayList<BlockPos>()
+		var current = 0
+		result.add(raw[0])
+		while (current < raw.lastIndex) {
+			var next = current + 1
+			for (candidate in raw.lastIndex downTo current + 1) {
+				if (abs(raw[candidate].y - raw[current].y) <= 1 && hasLineOfSight(world, raw[current], raw[candidate])) {
+					next = candidate
+					break
+				}
+			}
+			result.add(raw[next])
+			current = next
+		}
+		return result
+	}
+
+	private fun hasLineOfSight(world: ClientWorld, from: BlockPos, to: BlockPos): Boolean {
+		val steps = maxOf(abs(to.x - from.x), abs(to.y - from.y), abs(to.z - from.z))
+		if (steps == 0) return true
+		for (i in 1..steps) {
+			val t = i.toDouble() / steps
+			val pos = BlockPos(
+				kotlin.math.round(from.x + (to.x - from.x) * t).toInt(),
+				kotlin.math.round(from.y + (to.y - from.y) * t).toInt(),
+				kotlin.math.round(from.z + (to.z - from.z) * t).toInt(),
+			)
+			if (!canStandAt(world, pos)) return false
+		}
+		return true
 	}
 
 	private fun tooFar(pos: BlockPos, origin: BlockPos, maxRange: Int): Boolean =

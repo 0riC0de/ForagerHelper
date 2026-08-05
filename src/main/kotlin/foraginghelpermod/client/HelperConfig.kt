@@ -5,12 +5,12 @@ package foraginghelpermod.client
  */
 object HelperConfig {
 	var enabled: Boolean = false
-	var autoBreak: Boolean = true
-	var lookAtTarget: Boolean = true
-	var showStatusHud: Boolean = true
+	var autoBreak: Boolean = false
+	var lookAtTarget: Boolean = false
+	var showStatusHud: Boolean = false
 	var sneakWhileActive: Boolean = false
 	/** ON = favor small trees (more whole-tree bonuses); OFF = favor larger trees. */
-	var preferSmallTrees: Boolean = true
+	var preferSmallTrees: Boolean = false
 	/** Walk toward the selected tree using A* + vanilla movement keys. */
-	var autoWalk: Boolean = true
+	var autoWalk: Boolean = false
 }
