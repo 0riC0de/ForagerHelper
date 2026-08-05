@@ -13,4 +13,6 @@ object HelperConfig {
 	var preferSmallTrees: Boolean = false
 	/** Walk toward the selected tree using A* + vanilla movement keys. */
 	var autoWalk: Boolean = false
+	/** Use a held Aspect of the Void only to recover from a failed route or a void fall. */
+	var useAspectOfVoid: Boolean = true
 }

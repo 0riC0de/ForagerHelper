@@ -113,7 +113,8 @@ object AStarPathfinder {
 		range: Int,
 	): Set<BlockPos> {
 		val reachSq = reach * reach
-		val goals = HashSet<BlockPos>()
+		val visibleGoals = HashSet<BlockPos>()
+		val coveredGoals = HashSet<BlockPos>()
 		val goalCenter = Vec3d(goal.x + 0.5, goal.y + 0.5, goal.z + 0.5)
 		val r = minOf(range, (reach + 2).toInt() + 2)
 
@@ -123,13 +124,37 @@ object AStarPathfinder {
 					val feet = BlockPos(goal.x + dx, goal.y + dy, goal.z + dz)
 					if (!canStandAt(world, feet)) continue
 					val stand = Vec3d(feet.x + 0.5, feet.y + 1.0, feet.z + 0.5)
-					if (stand.squaredDistanceTo(goalCenter) <= reachSq) {
-						goals.add(feet.toImmutable())
+					if (stand.squaredDistanceTo(goalCenter) <= reachSq && hasMiningLineOfSight(world, feet, goal)) {
+						val safeFeet = feet.toImmutable()
+						visibleGoals.add(safeFeet)
+						if (hasOverheadCover(world, feet)) coveredGoals.add(safeFeet)
 					}
 				}
 			}
 		}
-		return goals
+		// Prefer standing below a solid overhead block when the tree provides one,
+		// but keep an uncovered fallback for trees in open terrain.
+		return if (coveredGoals.isNotEmpty()) coveredGoals else visibleGoals
+	}
+
+	private fun hasOverheadCover(world: ClientWorld, feet: BlockPos): Boolean =
+		!isAirLike(world, feet.up(2))
+
+	private fun hasMiningLineOfSight(world: ClientWorld, feet: BlockPos, goal: BlockPos): Boolean {
+		val from = Vec3d(feet.x + 0.5, feet.y + 1.62, feet.z + 0.5)
+		val to = Vec3d(goal.x + 0.5, goal.y + 0.5, goal.z + 0.5)
+		val steps = maxOf(abs(goal.x - feet.x), abs(goal.y - feet.y), abs(goal.z - feet.z)) * 3
+		if (steps <= 0) return true
+		for (i in 1..steps) {
+			val t = i.toDouble() / steps
+			val pos = BlockPos(
+				kotlin.math.floor(from.x + (to.x - from.x) * t).toInt(),
+				kotlin.math.floor(from.y + (to.y - from.y) * t).toInt(),
+				kotlin.math.floor(from.z + (to.z - from.z) * t).toInt(),
+			)
+			if (pos != goal && !isAirLike(world, pos)) return false
+		}
+		return true
 	}
 
 	private fun neighbors(
