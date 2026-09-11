@@ -428,7 +428,7 @@ class PathfinderAdversarialTest {
         // Block intermediate spaces:
         grid.addWall(2, 64, 1, 8, 65, 3)  // Wall between A and B
         grid.addWall(2, 64, 5, 8, 65, 7)  // Wall between B and C
-        grid.addWall(2, 64, -4, 8, 65, -1) // Block negative Z
+        grid.addWall(-5, 64, -5, 20, 65, -1) // Full-width south wall (closes x=0..1 and x=9+ flanks)
 
         val start = Vec3d(0.5, 64.0, 0.5)
         val goal = Vec3d(10.5, 64.0, 0.5)

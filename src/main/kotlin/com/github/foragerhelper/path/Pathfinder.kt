@@ -157,8 +157,9 @@ class AStarPathfinder(
         val startVec = Vec3d(startPos.x + 0.5, startGroundY, startPos.z + 0.5)
 
         val allowedRangeSq = allowedRange * allowedRange
-        if (startVec.squaredDistanceTo(goal) <= allowedRangeSq) {
-            return PathResult(success = true, waypoints = listOf(startVec))
+        // Use raw start (not block-snapped startVec) so start≈goal is always caught
+        if (start.squaredDistanceTo(goal) <= allowedRangeSq) {
+            return PathResult(success = true, waypoints = listOf(start))
         }
 
         val startNode = PathNode(
@@ -282,7 +283,10 @@ class AStarPathfinder(
                 val box = Box(targetPos.x + 0.2, groundY + 0.02, targetPos.z + 0.2, targetPos.x + 0.8, curY + 1.8, targetPos.z + 0.8)
                 if (env.isPassable(box)) {
                     val vec = Vec3d(targetPos.x + 0.5, groundY, targetPos.z + 0.5)
-                    val node = PathNode(targetPos, vec, 0.0, computeHeuristic(vec, goal, start), null, MoveAction.STEP_DOWN, dx, dz)
+                    // Use actual foot-level block pos so subsequent expansions call
+                    // pos.add(dx,0,dz) from the right Y column (e.g. y=65 not y=66).
+                    val nodePos = BlockPos.ofFloored(vec)
+                    val node = PathNode(nodePos, vec, 0.0, computeHeuristic(vec, goal, start), null, MoveAction.STEP_DOWN, dx, dz)
                     result.add(NeighborEdge(node, 1.05, dx, dz))
                 }
             } else {
@@ -329,6 +333,7 @@ class AStarPathfinder(
                     if (!env.isPassable(takeoffApexBox)) continue
 
                     var gapClear = true
+                    var gapPenaltyCost = 0.0
                     for (g in 1 until gapDist) {
                         val gapPos = pos.add(dx * g, 0, dz * g)
                         val gapBox = Box(gapPos.x + 0.1, curY, gapPos.z + 0.1, gapPos.x + 0.9, curY + 2.0, gapPos.z + 0.9)
@@ -336,6 +341,8 @@ class AStarPathfinder(
                             gapClear = false
                             break
                         }
+                        // Accumulate penalties for gap nodes so parkour doesn't free-skip penalized blocks
+                        gapPenaltyCost += penaltyMap.getPenalty(BlockPos.ofFloored(gapPos.x + 0.5, curY, gapPos.z + 0.5)).toDouble()
                     }
                     if (!gapClear) continue
 
@@ -344,7 +351,7 @@ class AStarPathfinder(
                         val pCost = if (gapDist == 2) 2.50 else 3.50
                         val vec = Vec3d(landingPos.x + 0.5, landingGroundY, landingPos.z + 0.5)
                         val node = PathNode(landingPos, vec, 0.0, computeHeuristic(vec, goal, start), null, MoveAction.PARKOUR, dx, dz)
-                        result.add(NeighborEdge(node, pCost, dx, dz))
+                        result.add(NeighborEdge(node, pCost + gapPenaltyCost, dx, dz))
                         break
                     }
                 }
