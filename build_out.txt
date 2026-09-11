@@ -1,0 +1,26 @@
+Starting a Gradle Daemon, 2 busy and 2 stopped Daemons could not be reused, use --status for details
+
+> Configure project :
+Fabric Loom: 1.17.20
+"Lock for cache='C:\Users\משתמש\.gradle\caches\fabric-loom', project=':'" is currently held by pid '17956'.
+Locking process does not exist, assuming abrupt termination and deleting lock file.
+Found existing cache lock file (ACQUIRED_PREVIOUS_OWNER_MISSING), rebuilding loom cache. This may have been caused by a failed or canceled build.
+
+Cannot remap modifiers because it does not exist in any of the targets [] or their parents.
+Cannot remap modifiers because it does not exist in any of the targets [] or their parents.
+
+> Configure project :
+:remapping sources
+
+> Task :checkKotlinGradlePluginConfigurationErrors SKIPPED
+
+> Task :compileKotlin
+w: file:///C:/Users/משתמש/source/repos/ForagerHelper/src/main/kotlin/foraginghelpermod/client/path/EtherWarpPlanner.kt:51:52 Unnecessary non-null assertion (!!) on a non-null receiver of type 'EtherWarpPlanner.Candidate'.
+w: file:///C:/Users/משתמש/source/repos/ForagerHelper/src/main/kotlin/foraginghelpermod/client/path/EtherWarpPlanner.kt:52:35 Unnecessary non-null assertion (!!) on a non-null receiver of type 'EtherWarpPlanner.Candidate'.
+w: file:///C:/Users/משתמש/source/repos/ForagerHelper/src/main/kotlin/foraginghelpermod/client/path/EtherWarpPlanner.kt:52:76 Unnecessary non-null assertion (!!) on a non-null receiver of type 'EtherWarpPlanner.Candidate'.
+w: Detected multiple Kotlin daemon sessions at 
+
+[Incubating] Problems report is available at: file:///C:/Users/D0AF~1/source/repos/FORAGE~1/build/reports/problems/problems-report.html
+
+BUILD SUCCESSFUL in 2m 20s
+1 actionable task: 1 executed

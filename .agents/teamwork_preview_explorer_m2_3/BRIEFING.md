@@ -1,47 +1,47 @@
-# BRIEFING — 2026-09-11T13:33:00Z
+# BRIEFING — 2026-09-11T19:40:30Z
 
 ## Mission
-Design the complete architecture and implementation specification for NodePenaltyMap.kt (dynamic spatial node penalization, decay timers, cost integration into A* g-score, and unstuck rerouting).
+Investigate terrain traversal (slabs, stairs, fences, headroom, hazards) and offline unit testing strategy for Milestone 2 (Minecraft 1.21.11) to enable robust offline pathfinding tests.
 
 ## 🔒 My Identity
-- Archetype: teamwork_preview_explorer
-- Roles: Node Penalization & Unstuck Specialist
+- Archetype: Explorer
+- Roles: Investigation, Synthesis
 - Working directory: c:\Users\משתמש\source\repos\ForagerHelper\.agents\teamwork_preview_explorer_m2_3
-- Original parent: c19b23eb-08dd-4cd6-b5a9-8f12e36c1a4c
-- Milestone: M2 (Hitbox-Aware Pathfinder)
+- Original parent: b449dcf8-efe4-4358-9a4a-012242c7a26b
+- Milestone: Milestone 2 (Terrain Traversal & Testability)
 
 ## 🔒 Key Constraints
-- Read-only investigation — do NOT implement production source code directly
-- Write only to our own directory: .agents/teamwork_preview_explorer_m2_3/
-- Pure Kotlin data structures with zero unnecessary tick overhead
-- API contract must strictly conform to Pathfinder interface in PROJECT.md
-- Address the infinite stuck loop in WalkController.kt:118-129
+- Read-only investigation — do NOT implement production code
+- Target: Minecraft 1.21.11, Fabric loader, Yarn mappings, Kotlin
+- Examine existing tests in `src/test/kotlin`
+- Investigate vertical traversal (slabs, stairs, fences, headroom, hazards)
+- Design offline unit testing strategy for PathfinderTest.kt without running client
 
 ## Current Parent
-- Conversation ID: c19b23eb-08dd-4cd6-b5a9-8f12e36c1a4c
-- Updated: 2026-09-11T13:37:00Z
+- Conversation ID: b449dcf8-efe4-4358-9a4a-012242c7a26b
+- Updated: 2026-09-11T19:40:30Z
 
 ## Investigation State
-- **Explored paths**: `ORIGINAL_REQUEST.md`, `PROJECT.md`, `DISPATCH.md`, `WalkController.kt:118-129, 207-215`, `AStarPathfinder.kt:47-75`, `DebugWorldOverlay.kt`, `TEST_INFRA.md`, peer explorer reports (`explorer_m2_1`, `explorer_m2_2`, `survey_1`).
+- **Explored paths**:
+  - `build.gradle.kts`, `gradle.properties`, test runner configurations
+  - `src/test/kotlin/com/github/foragerhelper/rotation/` (55 tests passing)
+  - `src/main/kotlin/foraginghelpermod/client/path/` (`AStarPathfinder.kt`, `WalkController.kt`)
+  - Remapped Minecraft 1.21.11 classes (`World`, `WorldView`, `CollisionView`, `BlockView`, `EmptyBlockView`, `Box`, `Bootstrap`)
 - **Key findings**:
-  - Legacy `WalkController` resets `stuckTicks` upon repathing, but A* deterministically reproduces the exact same blocked route due to lack of dynamic penalty memory.
-  - Primitive `BlockPos.asLong()` lookups eliminate garbage collection pressure during hot A* search loops.
-  - Spatial diffusion ($R=1, \alpha=0.5$) creates an obstacle repulsion field that prevents corner-shimming.
-  - Linear TTL decay (default 20s) clears temporary obstacles cleanly.
-  - Cost integration into $g$-score mathematically preserves A* admissibility while compelling detours.
-- **Unexplored areas**: None for M2.3 scope.
+  - Offline tests execute via `gradlew test` with mapped Minecraft jar on classpath.
+  - `Box` and `Vec3d` are pure math classes requiring zero bootstrapping.
+  - `World` implements `CollisionView` and `BlockView`. Abstracting `Pathfinder` to `CollisionView` or `PathEnvironment` decouples pathfinding from Minecraft client/network lifecycle.
+  - Slabs (0.5m) and stairs (two 0.5m steps) step up without jumping; fences (1.5m) block jumping; jump apex (1.252m) requires 2.5m ceiling clearance above takeoff.
+  - Swept-Box Line-of-Sight replaces 1D Bresenham using continuous Minkowski slab-raycast, eliminating diagonal corner snags.
+- **Unexplored areas**: None. Ready for analysis and handoff synthesis.
 
 ## Key Decisions Made
-- Structured `NodePenaltyMap` as an interface with `DefaultNodePenaltyMap` implementation.
-- Zero-allocation primitive 64-bit lookup method `getPenalty(posLong: Long, currentTimeMs: Long): Float`.
-- Linear decay over 20s TTL as default decay model.
-- Chebyshev radius-1 diffusion with 0.5x falloff.
-- Multi-tier unstuck recovery protocol coordinating `MovementController`, `UnstuckHandler`, and `Pathfinder`.
-- Comprehensive 15-case test suite covering Tiers 1-4.
+- Recommended `PathEnvironment` interface with `WorldPathEnvironment` (production) and `TestWorldGrid` (offline test harness) to test `PathfinderTest.kt` with 0 external mock frameworks.
+- Defined complete 5-Tier test catalog for Milestone 2.
 
 ## Artifact Index
-- `DISPATCH.md` — Received dispatch instructions
-- `BRIEFING.md` — Persistent situational awareness
-- `progress.md` — Liveness heartbeat
-- `report.md` — Comprehensive architectural specification
-- `handoff.md` — 5-component handoff report for orchestrator and implementers
+- DISPATCH.md — incoming dispatch message
+- BRIEFING.md — persistent working memory
+- progress.md — liveness heartbeat
+- analysis.md — detailed analysis
+- handoff.md — handoff report

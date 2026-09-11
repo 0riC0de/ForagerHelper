@@ -1,33 +1,20 @@
-# Dispatch Instructions: M2 Explorer 2 (Swept-Box Line-of-Sight & Path Smoothing)
+## 2026-09-11T19:36:47Z
+You are Explorer 2 for Milestone 2 (Swept-Box Collision & LOS).
+Your working directory is: c:\Users\משתמש\source\repos\ForagerHelper\.agents\teamwork_preview_explorer_m2_2
 
-## Identity & Role
-- You are: teamwork_preview_explorer_m2_2
-- Archetype: teamwork_preview_explorer
-- Role: Swept-Box Collision & LOS Specialist
-- Working directory: c:\Users\משתמש\source\repos\ForagerHelper\.agents\teamwork_preview_explorer_m2_2
-- Project root: c:\Users\משתמש\source\repos\ForagerHelper
-- Authoritative User Request: c:\Users\משתמש\source\repos\ForagerHelper\.agents\ORIGINAL_REQUEST.md
-- Scope Document: c:\Users\משתמש\source\repos\ForagerHelper\.agents\PROJECT.md
+MANDATORY FIRST STEP:
+Read c:\Users\משתמש\source\repos\ForagerHelper\.agents\ORIGINAL_REQUEST.md (authoritative requirements).
+Also read:
+- c:\Users\משתמש\source\repos\ForagerHelper\.agents\PROJECT.md
+- c:\Users\משתמש\source\repos\ForagerHelper\.agents\TEST_INFRA.md
 
-## Objective
-Design the complete implementation specification for `src/main/kotlin/com/github/foragerhelper/path/SweptBoxLOS.kt` and path smoothing.
-
-## Mandatory Steps
-1. Read `ORIGINAL_REQUEST.md` and `PROJECT.md` completely.
-2. Read survey reports detailing diagonal corner snagging caused by 1D center-point Bresenham checks.
-3. Formulate the swept bounding-box raycast algorithm:
-   - Player bounding box: width 0.6m, depth 0.6m, height 1.8m.
-   - For a segment from point $A$ to point $B$, compute swept bounding box `Box.of(center, 0.6, 1.8, 0.6)` or `box.stretch(delta)`.
-   - Subdivide long segments into swept steps (e.g. step length $\le 0.4$m) and query `world.getBlockCollisions(null, stepBox)`.
-   - Ensure the ground under feet along the straight-line shortcut remains walkable (no floating over pits or hazards).
-   - Completely prevent cutting corners across diagonal solid wall blocks.
-4. Define path smoothing (string pulling) that eliminates redundant intermediate waypoints while strictly respecting swept-box clearance.
-5. Write your report to `report.md` and `handoff.md`. Notify orchestrator when done.
-
-## 2026-09-11T13:32:59Z
-<USER_REQUEST>
-You are teamwork_preview_explorer_m2_2. Your working directory is c:\Users\משתמש\source\repos\ForagerHelper\.agents\teamwork_preview_explorer_m2_2.
-Read your DISPATCH.md, c:\Users\משתמש\source\repos\ForagerHelper\.agents\ORIGINAL_REQUEST.md, and c:\Users\משתמש\source\repos\ForagerHelper\.agents\PROJECT.md.
-Design the complete implementation specification for SweptBoxLOS.kt (swept bounding-box raycast line-of-sight check and path smoothing to eliminate diagonal corner snagging).
-Write your report to report.md and handoff.md and notify orchestrator when done.
-</USER_REQUEST>
+Your focus:
+1. Explore Minecraft 1.21.11 collision and math APIs available in the project (`net.minecraft.util.math.Box`, `net.minecraft.world.CollisionView`, `VoxelShapes`, `getBlockCollisions`, etc.).
+2. Design `src/main/kotlin/com/github/foragerhelper/path/SweptBoxLOS.kt`:
+   - Exact mathematical and geometric implementation of swept bounding-box raycast (0.6 width x 1.8 height).
+   - Continuous sweep vs discrete sub-stepping collision checks (e.g. step interval <= 0.25m).
+   - Ground support validation (preventing shortcuts that walk over deep chasms or float).
+   - Prevention of diagonal corner snagging against block edges.
+   - Path smoothing algorithm: how the raw A* node list is smoothed into direct line segments using SweptBoxLOS.
+3. Write detailed analysis to c:\Users\משתמש\source\repos\ForagerHelper\.agents\teamwork_preview_explorer_m2_2\analysis.md and your completion handoff to handoff.md.
+4. Send a message to your parent with summary of findings and path to handoff.md.

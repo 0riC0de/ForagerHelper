@@ -56,3 +56,56 @@ Integrity mode: development
 - [ ] Core architecture supports targeting both blocks and mobs through the `NavigationTarget` interface.
 - [ ] Existing tree foraging functionality operates seamlessly on the new architecture.
 - [ ] Project builds cleanly via Gradle (`compileKotlin` and `build`) with zero errors.
+
+## Follow-up — 2026-09-11T19:34:20Z
+
+The user requested: "continue, i saw some proccesses got terminated because of limit issues try them again"
+
+Resume execution of the ForagerHelper Fabric 1.21.11 Minecraft mod navigation rewrite.
+
+Working directory: c:\Users\משתמש\source\repos\ForagerHelper
+Integrity mode: development
+
+## Build Environment
+- Java 23 is located at `C:\Users\D0AF~1\JDKS~1\OPENJD~1` (8.3 short path).
+- To run Gradle test suite:
+  `cmd /c "cd /d C:\Users\D0AF~1\source\repos\FORAGE~1 && gradlew.bat -Dorg.gradle.java.home=C:\Users\D0AF~1\JDKS~1\OPENJD~1 test"`
+- To run Gradle build:
+  `cmd /c "cd /d C:\Users\D0AF~1\source\repos\FORAGE~1 && gradlew.bat -Dorg.gradle.java.home=C:\Users\D0AF~1\JDKS~1\OPENJD~1 build"`
+
+## Current Project State & Completed Work
+- **Milestone 1 (Rotation Engine R1) is COMPLETE and COMMITTED** (commit `c40513b`):
+  - `src/main/kotlin/com/github/foragerhelper/rotation/RotationEngine.kt`
+  - `src/main/kotlin/com/github/foragerhelper/rotation/SensitivityGCD.kt`
+  - `src/main/kotlin/com/github/foragerhelper/rotation/SpringSmoother.kt`
+  - All 55 tests in `RotationEngineTest`, `SensitivityGCDAdversarialTest`, and `SpringSmootherAdversarialTest` pass cleanly.
+- Full architectural specifications, interface contracts, and feature inventories are documented in:
+  - `.agents/PROJECT.md`
+  - `.agents/TEST_INFRA.md`
+  - `.agents/orchestrator_1/handoff.md`
+
+## Remaining Milestones to Implement and Verify
+
+### Milestone 2: Hitbox-Aware 3D A* Pathfinder (R2)
+- Implement `src/main/kotlin/com/github/foragerhelper/path/Pathfinder.kt` respecting player bounding box (0.6 width x 1.8 height).
+- Implement `src/main/kotlin/com/github/foragerhelper/path/SweptBoxLOS.kt` replacing 1D Bresenham line checks with swept AABB to eliminate diagonal corner snagging.
+- Handle vertical traversal: slabs, stairs, 1-block drops, jump apex ceiling headroom, and parkour gaps.
+- Implement `src/main/kotlin/com/github/foragerhelper/path/NodePenaltyMap.kt` for dynamic spatial penalty memory on stuck nodes.
+- Author comprehensive unit tests for node expansion, swept-box collision, and path smoothing.
+
+### Milestone 3: Universal Target Framework (R3)
+- Implement `src/main/kotlin/com/github/foragerhelper/target/NavigationTarget.kt`: sealed interface supporting `BlockTarget` (foraging/mining), `EntityTarget` (mobs/wildlife), and `PositionTarget` (waypoints).
+- Implement `src/main/kotlin/com/github/foragerhelper/target/TargetScanner.kt`: `TreeClusterTargetScanner`, `MobTargetScanner`, `CustomBlockTargetScanner`.
+- Implement `src/main/kotlin/com/github/foragerhelper/target/TargetManager.kt`: target lifecycle, locking, reach validation, and focus acquisition.
+- Author unit tests for target filtering, sorting, and reach calculation.
+
+### Milestone 4: Decoupled Movement Controller & Integration (R4)
+- Implement `src/main/kotlin/com/github/foragerhelper/movement/MovementController.kt`: pure input translation projecting player-to-waypoint vectors into local WASD keypresses without overriding camera yaw.
+- Implement `src/main/kotlin/com/github/foragerhelper/movement/UnstuckHandler.kt`: stagnation detection and multi-tier recovery maneuvers.
+- Wire with `RotationEngine`, `Pathfinder`, `TargetManager`.
+- Connect to UI/HUD/Commands: `HelperConfig`, `HelperOptionsScreen`, `StatusHud`, `DebugWorldOverlay` (1.21.11 `GizmoDrawing`), and `/forageroute`.
+
+### Milestone 5: Final Verification & Hardening
+- Run full non-cached Gradle test suite across all modules (`gradlew test --rerun-tasks`).
+- Verify `gradlew build` produces clean output with 0 errors.
+- Ensure all acceptance criteria from the original request are satisfied.

@@ -1,67 +1,49 @@
-# Handoff Report: 3D A* Pathfinder Architecture & Vertical Traversal Specification
+# Handoff Report: Hitbox-Aware 3D A* Pathfinder Architecture
 
-**Subagent**: `teamwork_preview_explorer_m2_1`  
-**Working Directory**: `c:\Users\משתמש\source\repos\ForagerHelper\.agents\teamwork_preview_explorer_m2_1`  
-**Role**: 3D A* Architecture & Vertical Traversal Specialist  
-**Milestone**: M2 (Hitbox-Aware Pathfinder)  
-**Target Specification File**: `c:\Users\משתמש\source\repos\ForagerHelper\.agents\teamwork_preview_explorer_m2_1\report.md`  
+**Author**: Explorer 1 (`teamwork_preview_explorer_m2_1`)  
+**Role**: Milestone 2 Explorer 1 (3D A* Pathfinder Algorithm Design)  
+**Recipient**: Parent Orchestrator (`b449dcf8-efe4-4358-9a4a-012242c7a26b`) & Implementers  
+**Target Files**:
+- `src/main/kotlin/com/github/foragerhelper/path/Pathfinder.kt`
+- `src/main/kotlin/com/github/foragerhelper/path/NodePenaltyMap.kt`
+- `analysis.md` (detailed architectural specification in current working directory)  
 **Date**: 2026-09-11  
 
 ---
 
 ## 1. Observation
 
-1. **Legacy Standing Surface Check**:
-   In `src/main/kotlin/foraginghelpermod/client/path/AStarPathfinder.kt:80-88`:
-   ```kotlin
-   fun canStandAt(world: ClientWorld, feet: BlockPos): Boolean {
-       if (!isAirLike(world, feet) || !isAirLike(world, feet.up())) return false
-       if (!world.getFluidState(feet).isEmpty || !world.getFluidState(feet.up()).isEmpty) return false
-       val ground = feet.down()
-       val groundState = world.getBlockState(ground)
-       if (groundState.isAir) return false
-       if (TreeScanner.isLogLike(groundState)) return false
-       return !groundState.getCollisionShape(world, ground).isEmpty
-   }
-   ```
-   And lines 119-123:
-   ```kotlin
-   private fun isAirLike(world: ClientWorld, pos: BlockPos): Boolean {
-       val state = world.getBlockState(pos)
-       if (TreeScanner.isLogLike(state)) return false
-       return state.getCollisionShape(world, pos).isEmpty
-   }
-   ```
-   *Observed Effect*: Bottom slabs, stairs, carpets, and snow layers possess non-empty collision shapes (`getCollisionShape(world, pos).isEmpty == false`). When placed at `feet`, `isAirLike(feet)` returns `false`. Consequently, slabs and stairs are treated as impassable walls.
+1. **Legacy Pathfinding Deficiencies in `AStarPathfinder.kt`**:
+   - In `src/main/kotlin/foraginghelpermod/client/path/AStarPathfinder.kt:80-88`:
+     ```kotlin
+     fun canStandAt(world: ClientWorld, feet: BlockPos): Boolean {
+         if (!isAirLike(world, feet) || !isAirLike(world, feet.up())) return false
+         if (!world.getFluidState(feet).isEmpty || !world.getFluidState(feet.up()).isEmpty) return false
+         val ground = feet.down()
+         val groundState = world.getBlockState(ground)
+         if (groundState.isAir) return false
+         if (TreeScanner.isLogLike(groundState)) return false
+         return !groundState.getCollisionShape(world, ground).isEmpty
+     }
+     ```
+     Observations:
+     a) Only checks integer `feet` and `feet.up()` block positions. Does not evaluate player's $0.6 \times 1.8$m bounding box (`Box`), causing corner catching on doors and diagonal transitions.
+     b) Slabs and stairs are rejected as standing spots because a slab at feet level has a collision box and is deemed non-air.
+     c) In `neighbors` (`AStarPathfinder.kt:243-246`):
+        ```kotlin
+        val up = flat.up()
+        if (!tooFar(up, origin, maxRange) && canStandAt(world, up) &&
+            isAirLike(world, pos.up(2))) {
+            result.add(up.toImmutable() to 1.45)
+        }
+        ```
+        Checking only `isAirLike(world, pos.up(2))` checks ceiling above takeoff, but fails to check ceiling above target jump apex ($Y + 1.25$ above ground), causing players to jump into low ceilings.
+     d) Diagonal transitions (`AStarPathfinder.kt:269-277`) do not check for corner snagging against adjacent wall corners.
+     e) No turn penalty: generates erratic zigzags.
+     f) No dynamic node penalization memory: deterministic search loops indefinitely when blocked.
+     g) No timeout protection: only checks `expansions < 6000`, causing client tick stalls up to 200ms in open caverns.
 
-2. **Legacy Jump Up Ceiling Check**:
-   In `src/main/kotlin/foraginghelpermod/client/path/AStarPathfinder.kt:242-246`:
-   ```kotlin
-   val up = flat.up()
-   if (!tooFar(up, origin, maxRange) && canStandAt(world, up) &&
-       isAirLike(world, pos.up(2))) {
-       result.add(up.toImmutable() to 1.45)
-   }
-   ```
-   *Observed Effect*: When jumping up 1 block, it checks `isAirLike(world, pos.up(2))`, but does not verify headroom at the jump apex trajectory or destination ceiling at `flat.up(2)`. In a 2-block high corridor with an upper ceiling, a jump up causes the player to collide head-first into the ceiling block at $Y+2.0$, killing vertical and horizontal velocity and aborting the jump.
-
-3. **Legacy Diagonal Corner Clipping**:
-   In `src/main/kotlin/foraginghelpermod/client/path/AStarPathfinder.kt:269-277`:
-   ```kotlin
-   for ((dx, dz) in arrayOf(-1 to -1, -1 to 1, 1 to -1, 1 to 1)) {
-       val diagonal = pos.add(dx, 0, dz)
-       val sideA = pos.add(dx, 0, 0)
-       val sideB = pos.add(0, 0, dz)
-       if (!tooFar(diagonal, origin, maxRange) && canStandAt(world, diagonal) &&
-           canStandAt(world, sideA) && canStandAt(world, sideB)) {
-           result.add(diagonal.toImmutable() to 1.414)
-       }
-   }
-   ```
-   *Observed Effect*: If `sideA` or `sideB` has a solid wall at head height (e.g. wall at $Y$ or $Y+1$) or if path smoothing connects two waypoints across an inner corner, the player's $0.6$m wide bounding box ($[-0.3, +0.3]$ from center) clips up to $0.3$m into the solid block corner, causing the player to snag against the wall.
-
-4. **Target Interface Contract in Scope**:
-   In `.agents/PROJECT.md:95-114`:
+2. **Architectural Contract in `PROJECT.md:95-114`**:
    ```kotlin
    package com.github.foragerhelper.path
 
@@ -81,98 +63,68 @@
        val blockedReason: String? = null
    )
    ```
+   Observations:
+   - `start` and `goal` are continuous 3D `Vec3d` coordinates.
+   - Output `waypoints` is `List<Vec3d>` with explicit standing height for slabs and stairs.
+   - `PathResult` includes `blockedReason: String?` for diagnostics.
 
-5. **Build Baseline Command & Result**:
-   - Command: `cmd /c "cd /d C:\Users\D0AF~1\source\repos\FORAGE~1 && gradlew.bat -Dorg.gradle.java.home=C:\Users\D0AF~1\JDKS~1\OPENJD~1 compileKotlin"`
-   - Result: `BUILD SUCCESSFUL in 15s, exit code 0`.
-   - Test command: `cmd /c "cd /d C:\Users\D0AF~1\source\repos\FORAGE~1 && gradlew.bat -Dorg.gradle.java.home=C:\Users\D0AF~1\JDKS~1\OPENJD~1 test"`
-   - Result: `BUILD SUCCESSFUL in 15s, exit code 0`.
+3. **Current Build & Test Environment Verification**:
+   - Executed: `cmd /c "cd /d C:\Users\D0AF~1\source\repos\FORAGE~1 && gradlew.bat -Dorg.gradle.java.home=C:\Users\D0AF~1\JDKS~1\OPENJD~1 test --rerun-tasks"`
+   - Result: `BUILD SUCCESSFUL in 48s, 5 actionable tasks: 5 executed`.
+   - Milestone 1 tests (`RotationEngineTest`, `SensitivityGCDAdversarialTest`, `SpringSmootherAdversarialTest`) pass 100%.
+
+4. **Peer Coordination & Interfaces**:
+   - Explorer 2 (`teamwork_preview_explorer_m2_2/report.md:617-621`): Defined `SweptBoxLOS.smoothPath(env, rawNodes)` and `CollisionEnvironment`.
+   - Explorer 3 (`teamwork_preview_explorer_m2_3/handoff.md:58-63`): Defined `NodePenaltyMap` with primitive 64-bit hashing (`BlockPos.asLong()`), spatial diffusion (radius 1, 0.5 falloff), and 20s TTL linear decay.
 
 ---
 
 ## 2. Logic Chain
 
-1. **Derivation of Ground Surface and Slabs (linking Observation 1)**:
-   - Observation 1 proved that testing `isAirLike(feet)` fails on bottom slabs and stairs because their collision box resides in the lower half of the block (`[0.0, 0.5]`).
-   - By querying `shape = state.getCollisionShape(world, groundPos)` and extracting `maxY = shape.getMax(Direction.Axis.Y)`, the exact physical standing surface elevation $Y_{\text{stand}} = \text{groundPos.y} + maxY$ is determined.
-   - For a bottom slab at $Y=64$, $maxY = 0.5 \implies Y_{\text{stand}} = 64.5$.
-   - The player's bounding box $\text{Box}(x-0.3, 64.5, z-0.3, x+0.3, 66.3, z+0.3)$ does not intersect the slab $[64.0, 64.5]$.
-   - Because vanilla player step height is $0.6$m (`generic.step_height`), any step transition with $|\Delta Y| \le 0.6$m is executed as a continuous auto-step without jumping.
-
-2. **Derivation of Jump Up Clearance and Apex Bonk Prevention (linking Observation 2)**:
-   - Observation 2 showed that jumping up 1 block under a 2-block ceiling bonks the player's head.
-   - A jump in Minecraft launches the player on an arc peaking at $+1.25$m above takeoff. With player height $1.8$m, total head height reaches $Y_{\text{takeoff}} + 3.05$m.
-   - To guarantee ceiling clearance:
-     a) Takeoff column must have $\ge 2.0$m vertical clearance (`takeoff.up(2)` clear).
-     b) Landing column must have $\ge 1.8$m clearance above landing elevation $Y_{\text{land}}$.
-     c) The horizontal swept volume across takeoff and landing from $Y_1 + 1.8$ to $Y_1 + 2.0$ must be completely empty (`world.isSpaceEmpty(ApexBox) == true`).
-
-3. **Derivation of Diagonal Double-Pillar Clearance (linking Observation 3)**:
-   - Observation 3 showed that cutting corners diagonally clips wall edges.
-   - For any diagonal transition from $(X_0, Z_0)$ to $(X_0 + dx, Z_0 + dz)$, the player's $0.6 \times 1.8$m hitbox extends $0.3$m into both orthogonal columns $(X_0 + dx, Z_0)$ and $(X_0, Z_0 + dz)$.
-   - Requiring both orthogonal pillars to satisfy `world.isSpaceEmpty(pillarBox) == true` strictly guarantees zero collision along the diagonal move.
-
-4. **Admissible Heuristic Formulation**:
-   - Let Euclidean distance be $D = \sqrt{\Delta x^2 + \Delta y^2 + \Delta z^2}$.
-   - All physical move costs $\ge$ physical Euclidean distance: cardinal walk ($1.0 \ge 1.0$), diagonal walk ($1.414 \ge 1.414$), slab step-up ($1.25 \ge 1.118$), jump-up 1 block ($1.45 \ge 1.414$), safe drop ($2.0 \ge 1.414$), parkour gap ($3.0 \ge 2.0$).
-   - Therefore, $h(n) = D + \max(0.0, y_{\text{goal}} - y) \times 0.1$ is strictly admissible ($h(n) \le h^*(n)$).
-
-5. **Interface Architecture (linking Observation 4 & 5)**:
-   - The architecture implements `Pathfinder` as an interface with `DefaultPathfinder` companion delegate.
-   - Uses a 64-bit compact coordinate key `packKey(x, standingY, z)` to prevent hash collisions between full blocks and half slabs.
-   - Integrates with `SweptBoxLOS` for path smoothing and `NodePenaltyMap` for dynamic obstacle avoidance.
+1. From **Observation 1a & 1d**, the player's bounding box is $0.6$m wide and $1.8$m high. Moving diagonally between $(0, 0)$ and $(1, 1)$ brings the player box across the corner vertices of $(1, 0)$ and $(0, 1)$ with an overlap of $0.3$m if either is solid. Therefore, diagonal neighbor generation must enforce that BOTH orthogonal side blocks `(x+dx, y, z)` and `(x, y, z+dz)` have clear headroom at feet and head ($Y$ and $Y+1$) to completely eliminate corner snagging before path smoothing.
+2. From **Observation 1b**, in Minecraft, bottom slabs have collision height $0.5$m and step height is $0.6$m. By tracking continuous standing elevation `posVec.y` in `PathNode` ($Y$ for full blocks, $Y + 0.5$ for bottom slabs/stairs), the pathfinder naturally generates `STEP_UP` (cost 1.10) and `STEP_DOWN` (cost 1.05) transitions. Ceiling clearance is enforced up to $Y + 2.3$ (`pos.up(1)` and `pos.up(2)` clear).
+3. From **Observation 1c**, vanilla jumps reach an apex of $\approx 1.25$m above starting ground ($Y + 3.05$ head height). Enforcing 3 blocks of clearance above takeoff (`current.pos.up(2)` clear) guarantees that the player will never bump their head against ceilings mid-jump.
+4. From **Observation 1e**, adding an angular turn penalty ($\Delta \theta = 0^\circ \to 0.0, 45^\circ \to 0.05, 90^\circ \to 0.15, \dots$) mathematically penalizes zigzagging, breaking symmetrical diamond search frontiers and forcing A* to expand long straight corridors first.
+5. From **Observation 1f & Observation 4**, incorporating `NodePenaltyMap` dynamically adds detour costs to stagnated nodes ($+50.0$f), compelling A* to generate alternative routes when obstacles appear.
+6. From **Observation 1g**, enforcing an expansion budget (`maxExpansions = 6000`) and a real-time deadline check (`maxComputeTimeMs = 50L` queried every 64 iterations) guarantees that pathfinding never blocks client ticks or drops frame rates.
+7. From **Observation 2 & Observation 4**, routing path smoothing through `SweptBoxLOS.smoothPath(env, rawNodes)` preserves anchor nodes (`JUMP_UP`, `DROP`, `PARKOUR`) while collapsing straight/diagonal corridors into minimal, humanized waypoints.
+8. From **Observation 3 & Observation 4**, abstracting world collision queries via `CollisionEnvironment` allows `PathfinderTest.kt` to run 100% headless in `gradlew test` with a synthetic `TestWorldGrid` without requiring a running client.
 
 ---
 
 ## 3. Caveats
 
-1. **Entities & Dynamic Hitboxes**:
-   - `world.isSpaceEmpty(box)` or `world.getBlockCollisions(null, box)` evaluates block collisions. Dynamic entities (boats, shulkers, minecarts, players, mobs) can also obstruct movement. The `MovementController` unstuck loop handles dynamic entities by calling `Pathfinder.penalizeNode(stuckPos)` when obstructed.
-2. **Open Iron Bars, Glass Panes, and Walls**:
-   - Thin collision shapes (iron bars, glass panes, fences) have non-empty voxel shapes that are smaller than a full block. `getBlockCollisions` correctly catches them if they overlap the player's $0.6 \times 1.8$m box.
-3. **Fluids & Swimming**:
-   - The current specification focuses on ground traversal and safe water avoidance. Water swimming (swimming mechanics, breath depletion, 3D underwater swimming) is out of scope for land foraging and is treated as a high-cost deterrent.
+1. **Parkour Gap Bounds**: Parkour neighbor generation is strictly bounded to 1-block and 2-block flat horizontal gaps (distances 2 and 3). 3-block gaps (distance 4) require precise momentum/sprint timing and are excluded to maintain 100% execution reliability.
+2. **Dynamic Obstacle Transience**: Penalties registered in `NodePenaltyMap` decay linearly over 20 seconds. If an obstructing mob wanders away immediately, the node remains penalized for several seconds. This slight conservatism is intentional to avoid thrashing.
+3. **Movement Controller Separation**: The pathfinder computes waypoints and action tags. The physical keypress generation (WASD, jump, sprint) belongs to Milestone 4 (`movement/MovementController.kt`).
 
 ---
 
 ## 4. Conclusion
 
-The architectural design for `Pathfinder.kt` is fully specified in `report.md`. It directly resolves all legacy pathfinding defects:
-- Slabs and stairs are recognized and traversed smoothly as auto-steps ($\le 0.6$m) without jumping.
-- 1-block jumps are protected by strict $2.0$m apex ceiling headroom verification, eliminating ceiling bonks.
-- 1 to 3 block safe drops are verified using vertical fall column swept boxes.
-- 1-block parkour jumps across chasms are validated with continuous headroom.
-- Diagonal transitions enforce double orthogonal pillar clearance, eliminating diagonal corner snags.
-- Data structures feature compact 64-bit coordinate packing, tie-breaking priority queue, and admissible Euclidean heuristic.
-- Contracts match `PROJECT.md:95-114` exactly.
+The architectural specification and algorithm design for `Pathfinder.kt` and `NodePenaltyMap.kt` is complete and documented in `analysis.md`. It provides:
+1. Strict compliance with `PROJECT.md:95-114` (`Pathfinder` interface and `PathResult`).
+2. Robust hitbox-aware neighbor expansion: cardinal, diagonal corner-checked, 0.5-block step up/down, 1-block jump with apex clearance, 1-3 block drops, and 1-2 block parkour gaps.
+3. Admissible Euclidean heuristic with two-tier tie-breaking and angular turn penalties.
+4. Stateful dynamic penalization via `NodePenaltyMap` to break infinite stuck loops.
+5. Strict 50ms / 6000-node safety budget with diagnostic failure reporting.
+6. Headless offline testability via `CollisionEnvironment`.
 
 ---
 
 ## 5. Verification Method
 
-### 5.1 Compilation Verification
-Run from command line or terminal:
-```powershell
-cmd /c "cd /d C:\Users\D0AF~1\source\repos\FORAGE~1 && gradlew.bat -Dorg.gradle.java.home=C:\Users\D0AF~1\JDKS~1\OPENJD~1 compileKotlin"
-```
-*Expected*: Exit code 0, 0 compilation errors.
-
-### 5.2 Unit & Integration Test Suite Verification
-Run from command line or terminal:
-```powershell
-cmd /c "cd /d C:\Users\D0AF~1\source\repos\FORAGE~1 && gradlew.bat -Dorg.gradle.java.home=C:\Users\D0AF~1\JDKS~1\OPENJD~1 test"
-```
-*Expected*: Exit code 0, all tests pass.
-
-### 5.3 Behavioral Test Invariants to Implement in `PathfinderTest.kt`:
-1. `testSlabWalkNoJump`: Start at $(0, 64, 0)$, bottom slab at $(1, 64, 0)$ ($Y_{\text{stand}} = 64.5$). Path is found, transition is `STEP_UP`, cost is $1.25$, no jump flag.
-2. `testJumpApexCeilingHeadroomBonkPrevention`: Start at $(0, 64, 0)$, goal at $(1, 65, 0)$. Solid block ceiling at $(0, 66, 0)$ ($Y=66.0$, headroom $2.0$m above feet). Jump up must be **rejected**; when ceiling is removed, jump up **succeeds**.
-3. `testSafeDrop3Blocks`: Start at $(0, 67, 0)$, drop to $(1, 64, 0)$ ($H=3$ blocks). Entire vertical column clear $\implies$ succeeds. Protruding block at $(1, 65, 0) \implies$ rejected.
-4. `testDoublePillarDiagonalCornerClearance`: Start at $(0, 64, 0)$, goal at $(1, 64, 1)$. If $(1, 64, 0)$ is a solid wall, diagonal move is rejected; path routes around $(0, 64, 1) \to (1, 64, 1)$.
-5. `testHazardAvoidanceLavaAndBerries`: Ground path through sweet berry bush or lava is rejected in favor of a detour.
-
-### 5.4 Invalidation Conditions
-This specification is invalidated if:
-- Slabs or stairs fail to yield valid paths or cause the player to jump when stepping up $\le 0.6$m.
-- A player bonks their head against a ceiling during an ascent in a 2-block high corridor.
-- Diagonal movement clips into adjacent wall blocks.
+1. **Inspect Artifacts**:
+   - Verify `c:\Users\משתמש\source\repos\ForagerHelper\.agents\teamwork_preview_explorer_m2_1\analysis.md` contains full design, mathematical proofs, and code reference.
+2. **Run Existing Test Suite**:
+   ```cmd
+   cmd /c "cd /d C:\Users\D0AF~1\source\repos\FORAGE~1 && gradlew.bat -Dorg.gradle.java.home=C:\Users\D0AF~1\JDKS~1\OPENJD~1 test"
+   ```
+   Must exit with code 0.
+3. **Downstream Implementation Verification**:
+   When `Pathfinder.kt` and `NodePenaltyMap.kt` are implemented in `src/main/kotlin/com/github/foragerhelper/path/`:
+   Run `gradlew.bat compileKotlin` and `gradlew.bat test`.
+4. **Invalidation Conditions**:
+   - Generation of diagonal moves without verifying both orthogonal cardinal corner blocks.
+   - Generation of jump moves without checking takeoff apex headroom (`pos.up(2)`).
+   - Execution taking $> 50$ms without terminating via timeout protection.
