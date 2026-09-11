@@ -1,0 +1,68 @@
+--- a/src/main/kotlin/com/github/foragerhelper/rotation/SpringSmoother.kt
++++ b/src/main/kotlin/com/github/foragerhelper/rotation/SpringSmoother.kt
+@@ -61,4 +61,6 @@
+     fun reset(initialAngle: Float, initialVelocity: Float = 0.0f) {
+-        currentAngle = sanitizeAngle(initialAngle)
+-        velocity = initialVelocity
++        val safeAngle = if (initialAngle.isFinite()) initialAngle else 0.0f
++        val safeVelocity = if (initialVelocity.isFinite()) initialVelocity else 0.0f
++        currentAngle = sanitizeAngle(safeAngle)
++        velocity = safeVelocity
+     }
+@@ -74,4 +76,14 @@
+     fun update(targetAngle: Float, deltaTimeSeconds: Float): Float {
+-        if (deltaTimeSeconds <= 0.0f) return 0.0f
++        // Defensive input sanitization: reject invalid delta times immediately
++        if (deltaTimeSeconds.isNaN() || deltaTimeSeconds.isInfinite() || deltaTimeSeconds <= 0.0f) {
++            return 0.0f
++        }
++
++        // Defensive input sanitization: reject NaN/Infinity targets without state modification (no latching)
++        if (targetAngle.isNaN() || targetAngle.isInfinite()) {
++            return 0.0f
++        }
++
++        // Self-healing: unlatch if internal state was corrupted prior to call
++        if (!currentAngle.isFinite()) currentAngle = 0.0f
++        if (!velocity.isFinite()) velocity = 0.0f
+ 
+         // Guard against massive frame freeze / alt-tab spikes
+@@ -144,4 +156,7 @@
+-    private fun sanitizeAngle(angle: Float): Float = when (mode) {
+-        AngleMode.WRAPPED -> MathHelper.wrapDegrees(angle)
+-        AngleMode.CLAMPED -> angle.coerceIn(minAngle, maxAngle)
++    private fun sanitizeAngle(angle: Float): Float {
++        if (!angle.isFinite()) {
++            return if (currentAngle.isFinite()) currentAngle else 0.0f
++        }
++        return when (mode) {
++            AngleMode.WRAPPED -> MathHelper.wrapDegrees(angle)
++            AngleMode.CLAMPED -> angle.coerceIn(minAngle, maxAngle)
++        }
+     }
+@@ -196,4 +211,6 @@
+     fun reset(initialYaw: Float, initialPitch: Float) {
+-        yawSpring.reset(initialYaw, 0.0f)
+-        pitchSpring.reset(initialPitch, 0.0f)
++        val safeYaw = if (initialYaw.isFinite()) initialYaw else 0.0f
++        val safePitch = if (initialPitch.isFinite()) initialPitch else 0.0f
++        yawSpring.reset(safeYaw, 0.0f)
++        pitchSpring.reset(safePitch, 0.0f)
+     }
+@@ -211,4 +228,6 @@
+     fun setNaturalFrequency(omega: Float) {
+-        yawSpring.omega = omega
+-        pitchSpring.omega = omega
++        if (omega.isFinite() && omega >= 0.0f) {
++            yawSpring.omega = omega
++            pitchSpring.omega = omega
++        }
+     }
+@@ -221,4 +240,7 @@
+     fun update(targetYaw: Float, targetPitch: Float, deltaTimeSeconds: Float): RotationDelta {
++        if (deltaTimeSeconds.isNaN() || deltaTimeSeconds.isInfinite() || deltaTimeSeconds <= 0.0f) {
++            return RotationDelta(0.0f, 0.0f)
++        }
+         val dYaw = yawSpring.update(targetYaw, deltaTimeSeconds)
+         val dPitch = pitchSpring.update(targetPitch, deltaTimeSeconds)
+         return RotationDelta(dYaw, dPitch)

@@ -1,0 +1,77 @@
+--- src/main/kotlin/com/github/foragerhelper/rotation/SensitivityGCD.kt
++++ src/main/kotlin/com/github/foragerhelper/rotation/SensitivityGCD.kt
+@@ -78,13 +78,16 @@
+-        // --- Pitch Anti-Windup Clamping ---
++        // --- Pitch Boundary Anti-Windup Clamping ---
+         var effectiveDesiredPitch = desiredDeltaPitch
++        var pitchClampedAtBoundary = false
+         if (currentPitch != null) {
+-            if (currentPitch >= 90.0f && desiredDeltaPitch > 0.0) {
++            if (currentPitch >= 90.0f - 1e-4f && desiredDeltaPitch > 0.0) {
+                 effectiveDesiredPitch = 0.0
+                 pitchRemainder = 0.0
+-            } else if (currentPitch <= -90.0f && desiredDeltaPitch < 0.0) {
++                pitchClampedAtBoundary = true
++            } else if (currentPitch <= -90.0f + 1e-4f && desiredDeltaPitch < 0.0) {
+                 effectiveDesiredPitch = 0.0
+                 pitchRemainder = 0.0
++                pitchClampedAtBoundary = true
+             }
+         }
+ 
+         // --- Accumulate Desired Delta + Stored Remainder ---
+         val totalYaw = desiredDeltaYaw + yawRemainder
+         val totalPitch = effectiveDesiredPitch + pitchRemainder
+ 
+         // --- Extract Exact Nearest Integer Mouse Counts ---
+         var countsYaw = nearestCount(totalYaw, step)
+         var countsPitch = nearestCount(totalPitch, step)
+ 
++        // --- Instant Camera Reversal From Pitch Boundary ---
++        // Prevents freeze/stall when reversing away from pitch boundary under high sensitivity or sub-step deltas
++        if (currentPitch != null) {
++            if (currentPitch >= 90.0f - step.toFloat() && desiredDeltaPitch < 0.0 && countsPitch >= 0) {
++                countsPitch = -1
++                pitchRemainder = 0.0
++                pitchClampedAtBoundary = true
++            } else if (currentPitch <= -90.0f + step.toFloat() && desiredDeltaPitch > 0.0 && countsPitch <= 0) {
++                countsPitch = 1
++                pitchRemainder = 0.0
++                pitchClampedAtBoundary = true
++            }
++        }
++
+         // --- Pitch Boundary Over-Rotation Clamping ---
+         if (currentPitch != null && countsPitch != 0) {
+             val potentialPitchDelta = countsToDelta(countsPitch, safeSens, isSpyglass)
+             val projectedPitch = currentPitch + potentialPitchDelta
+             if (projectedPitch > 90.0f) {
+                 val allowedDelta = (90.0f - currentPitch).toDouble()
+                 countsPitch = (allowedDelta / step).toInt().coerceAtLeast(0)
+                 pitchRemainder = 0.0
++                pitchClampedAtBoundary = true
+             } else if (projectedPitch < -90.0f) {
+                 val allowedDelta = (-90.0f - currentPitch).toDouble()
+                 countsPitch = (allowedDelta / step).toInt().coerceAtMost(0)
+                 pitchRemainder = 0.0
++                pitchClampedAtBoundary = true
+             }
+         }
+ 
+         // --- Compute Exact Applied Deltas (Bit-Exact with Vanilla) ---
+         val appliedDeltaYaw = countsToDelta(countsYaw, safeSens, isSpyglass)
+         val appliedDeltaPitch = countsToDelta(countsPitch, safeSens, isSpyglass)
+ 
+-        // --- Update Remainders for Next Frame ---
+-        yawRemainder = totalYaw - (countsYaw.toDouble() * step)
+-        if (currentPitch == null || (currentPitch in -89.99f..89.99f)) {
+-            pitchRemainder = totalPitch - (countsPitch.toDouble() * step)
+-        }
++        // --- Update Remainders for Next Frame with Half-Step Bound Clamping ---
++        val halfStep = 0.5 * step
++        yawRemainder = (totalYaw - (countsYaw.toDouble() * step)).coerceIn(-halfStep, halfStep)
++        if (!pitchClampedAtBoundary) {
++            pitchRemainder = (totalPitch - (countsPitch.toDouble() * step)).coerceIn(-halfStep, halfStep)
++        } else {
++            pitchRemainder = 0.0
++        }

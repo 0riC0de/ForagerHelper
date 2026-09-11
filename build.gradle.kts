@@ -1,5 +1,8 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+System.setProperty("user.home", "C:/Users/D0AF~1")
+System.setProperty("gradle.user.home", "C:/Users/D0AF~1/.gradle")
+
 plugins {
 	id("net.fabricmc.fabric-loom-remap")
 	`maven-publish`
@@ -32,6 +35,17 @@ dependencies {
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation("net.fabricmc.fabric-api:fabric-api:${providers.gradleProperty("fabric_api_version").get()}")
     modImplementation("net.fabricmc:fabric-language-kotlin:${providers.gradleProperty("fabric_kotlin_version").get()}")
+
+    testImplementation(kotlin("test"))
+}
+
+layout.buildDirectory.set(file("C:/Users/D0AF~1/source/repos/FORAGE~1/build"))
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+    executable = "C:/Users/D0AF~1/JDKS~1/OPENJD~1/bin/java.exe"
+    workingDir = file("C:/Users/D0AF~1/source/repos/FORAGE~1")
+    jvmArgs("-Dfile.encoding=UTF-8")
 }
 
 tasks.processResources {
