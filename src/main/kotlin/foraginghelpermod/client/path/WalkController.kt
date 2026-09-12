@@ -332,92 +332,17 @@ object WalkController {
 		return null
 	}
 
-	private fun lookAtNaturally(player: ClientPlayerEntity, point: Vec3d) {
-		lookAtNaturally(player, point, precise = false)
+	private fun lookAtNaturally(player: ClientPlayerEntity, point: Vec3d, precise: Boolean = false) {
+		com.github.foragerhelper.rotation.RotationEngine.setTarget(point)
 	}
 
-	private fun lookAtNaturally(player: ClientPlayerEntity, point: Vec3d, precise: Boolean) {
-		val dx = point.x - player.x
-		val dy = point.y - player.eyeY
-		val dz = point.z - player.z
-		val horiz = sqrt(dx * dx + dz * dz)
-
-		val targetYaw = MathHelper.wrapDegrees(Math.toDegrees(atan2(-dx, dz)).toFloat())
-		var targetPitch = MathHelper.clamp(Math.toDegrees(-atan2(dy, horiz)).toFloat(), -90f, 90f)
-
-		targetPitch = MathHelper.clamp(targetPitch, -45f, 35f)
-
-		if (!initializedLook) {
-			lastYaw = MathHelper.wrapDegrees(player.yaw)
-			lastPitch = MathHelper.clamp(player.pitch, -90f, 90f)
-			initializedLook = true
-		}
-		if (precise) targetPitch = MathHelper.clamp(targetPitch, -89f, 89f)
-
-		val newTarget = lookPlanTargetYaw.isNaN() ||
-			abs(MathHelper.wrapDegrees(targetYaw - lookPlanTargetYaw)) > 0.35f ||
-			abs(targetPitch - lookPlanTargetPitch) > 0.35f
-		if (newTarget) {
-			lookPlanStartYaw = MathHelper.wrapDegrees(player.yaw)
-			lookPlanStartPitch = MathHelper.clamp(player.pitch, -90f, 90f)
-			lookPlanTargetYaw = targetYaw
-			lookPlanTargetPitch = targetPitch
-			lookPlanDeltaYaw = MathHelper.wrapDegrees(targetYaw - lookPlanStartYaw)
-			lookPlanDeltaPitch = targetPitch - lookPlanStartPitch
-
-			val totalMove = abs(lookPlanDeltaYaw) + abs(lookPlanDeltaPitch) / 2f
-			val speed = when {
-				totalMove < 8f -> Random.nextDouble(2.0, 4.0)
-				totalMove < 33f -> Random.nextDouble(4.5, 8.0)
-				totalMove < 70f -> Random.nextDouble(7.0, 12.0)
-				totalMove < 140f -> Random.nextDouble(10.0, 16.0)
-				else -> Random.nextDouble(14.0, 21.0)
-			}
-			lookPlanSteps = if (precise) {
-				maxOf(1, ceil(maxOf(abs(lookPlanDeltaYaw), abs(lookPlanDeltaPitch)) / speed * 1.25).toInt())
-			} else {
-				maxOf(1, ceil(maxOf(abs(lookPlanDeltaYaw), abs(lookPlanDeltaPitch)) / speed).toInt())
-			}
-			lookPlanStep = 0
-			lookPlanCurve = when {
-				totalMove < 33f -> Random.nextDouble(0.0, 0.35)
-				totalMove < 70f -> Random.nextDouble(0.7, 2.5)
-				totalMove < 140f -> Random.nextDouble(1.2, 4.0)
-				else -> Random.nextDouble(1.8, 5.5)
-			}.toFloat() * if (Random.nextBoolean()) 1f else -1f
-		}
-
-		lookPlanStep++
-		val fraction = (lookPlanStep.toFloat() / lookPlanSteps).coerceIn(0f, 1f)
-		val eased = fraction * fraction * (3f - 2f * fraction)
-		val magnitude = sqrt(lookPlanDeltaYaw * lookPlanDeltaYaw + lookPlanDeltaPitch * lookPlanDeltaPitch).coerceAtLeast(1f)
-		val curveFactor = sin(Math.PI * fraction).toFloat() * lookPlanCurve
-		val curveYaw = -lookPlanDeltaPitch / magnitude * curveFactor
-		val curvePitch = lookPlanDeltaYaw / magnitude * curveFactor
-		val jitterScale = if (precise) 0.04f else 0.12f
-		val jitterYaw = Random.nextDouble(-jitterScale.toDouble(), jitterScale.toDouble()).toFloat()
-		val jitterPitch = Random.nextDouble(-jitterScale.toDouble(), jitterScale.toDouble()).toFloat()
-
-		val nextYaw = lookPlanStartYaw + lookPlanDeltaYaw * eased + curveYaw + jitterYaw
-		val nextPitch = lookPlanStartPitch + lookPlanDeltaPitch * eased + curvePitch + jitterPitch
-		lastYaw = MathHelper.wrapDegrees(nextYaw)
-		lastPitch = MathHelper.clamp(nextPitch, -90f, 90f)
-		player.yaw = lastYaw
-		player.pitch = lastPitch
-	}
-
-	private fun humanizeLookPoint(point: Vec3d): Vec3d = Vec3d(
-		point.x + Random.nextDouble(-0.159, 0.159),
-		point.y + Random.nextDouble(-0.039, 0.039),
-		point.z + Random.nextDouble(-0.159, 0.159),
-	)
+	private fun humanizeLookPoint(point: Vec3d): Vec3d = point
 
 	private fun yawTo(player: ClientPlayerEntity, point: Vec3d): Float =
 		MathHelper.wrapDegrees(Math.toDegrees(atan2(-(point.x - player.x), point.z - player.z)).toFloat())
 
 	private fun setMovement(client: MinecraftClient, yawDiff: Float, parkour: Boolean, parkourAligned: Boolean) {
 		val options = client.options
-		// Forward movement is retained for normal walking; strafe input prevents wide arcs during turns.
 		options.forwardKey.setPressed(!parkour || parkourAligned)
 		options.backKey.setPressed(false)
 		options.leftKey.setPressed(!parkour && yawDiff < -55f)
@@ -426,7 +351,9 @@ object WalkController {
 	}
 
 	fun lookAtBlock(player: ClientPlayerEntity, block: BlockPos) {
-		lookAtNaturally(player, miningLookPoint(player, block), precise = true)
+		val target = com.github.foragerhelper.target.BlockTarget(block)
+		val focus = target.getFocusPoint(player.entityWorld, player) ?: miningLookPoint(player, block)
+		com.github.foragerhelper.rotation.RotationEngine.setTarget(focus)
 	}
 
 	/** Small corrective input used while the chop action is settling or stalled. */
