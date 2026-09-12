@@ -37,7 +37,7 @@ object InputController {
 		get() = committedPositions.isNotEmpty()
 
 	val walkStatus: String
-		get() = WalkController.status
+		get() = com.github.foragerhelper.movement.MovementController.currentStatus
 
 	private var tickCounter: Int = 0
 	private var committedPositions: Set<BlockPos> = emptySet()
@@ -82,7 +82,13 @@ object InputController {
 
 		val manualGoal = HelperConfig.manualRouteGoal
 		if (manualGoal != null) {
-			WalkController.tick(client, manualGoal, REACH, forceRoute = true, exactDestination = true)
+			val posTarget = com.github.foragerhelper.target.PositionTarget(
+				Vec3d(manualGoal.x + 0.5, manualGoal.y.toDouble(), manualGoal.z + 0.5)
+			)
+			if (com.github.foragerhelper.movement.MovementController.activeTarget != posTarget) {
+				com.github.foragerhelper.movement.MovementController.setDestination(posTarget)
+			}
+			com.github.foragerhelper.movement.MovementController.tick(client)
 			return
 		}
 
@@ -104,7 +110,19 @@ object InputController {
 			}
 		}
 
-		WalkController.tick(client, targetLog, REACH)
+		if (targetLog != null && HelperConfig.autoWalk) {
+			val blockTarget = com.github.foragerhelper.target.BlockTarget(targetLog!!)
+			val current = com.github.foragerhelper.movement.MovementController.activeTarget
+			if (current !is com.github.foragerhelper.target.BlockTarget || current.blockPos != targetLog) {
+				com.github.foragerhelper.movement.MovementController.setDestination(blockTarget)
+			}
+			com.github.foragerhelper.movement.MovementController.tick(client)
+		} else {
+			if (com.github.foragerhelper.movement.MovementController.isNavigating) {
+				com.github.foragerhelper.movement.MovementController.stop()
+			}
+		}
+
 		ChopController.tick(client, targetLog, REACH)
 	}
 
@@ -135,12 +153,16 @@ object InputController {
 		treeCount = 0
 		tickCounter = 0
 		committedPositions = emptySet()
+		com.github.foragerhelper.movement.MovementController.stop()
 		WalkController.stop(client)
 	}
 
 	fun forgetTarget(pos: BlockPos) {
 		committedPositions = committedPositions - pos
-		if (targetLog == pos) targetLog = null
+		if (targetLog == pos) {
+			targetLog = null
+			com.github.foragerhelper.movement.MovementController.stop()
+		}
 	}
 
 	fun nearestDistance(): Double? =

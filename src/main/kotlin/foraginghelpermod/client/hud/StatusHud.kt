@@ -57,10 +57,20 @@ object StatusHud {
 			y += 12
 		}
 
-		context.drawTextWithShadow(tr, "Walk: ${InputController.walkStatus}", 4, y, Colors.TEXT_MUTED)
+		val activeTarget = com.github.foragerhelper.movement.MovementController.activeTarget
+		val walkStatus = com.github.foragerhelper.movement.MovementController.currentStatus
+		context.drawTextWithShadow(tr, "Walk: $walkStatus", 4, y, Colors.TEXT_MUTED)
 		y += 12
 
-		if (target != null) {
+		if (activeTarget != null && client.player != null) {
+			context.drawTextWithShadow(
+				tr,
+				activeTarget.describeStatus(client.player!!),
+				4,
+				y,
+				Colors.TEXT
+			)
+		} else if (target != null) {
 			context.drawTextWithShadow(
 				tr,
 				"Target: ${target.x}, ${target.y}, ${target.z}",

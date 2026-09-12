@@ -9,6 +9,7 @@ import net.fabricmc.api.ClientModInitializer
 
 class ForagingHelperClient : ClientModInitializer {
 	override fun onInitializeClient() {
+		com.github.foragerhelper.rotation.RotationEngine.register()
 		ModKeyBindings.register()
 		InputController.register()
 		ManualRouteCommand.register()

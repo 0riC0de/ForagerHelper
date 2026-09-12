@@ -19,6 +19,11 @@ interface Pathfinder {
     fun findPath(world: World, start: Vec3d, goal: Vec3d, allowedRange: Double = 1.0): PathResult
 
     /**
+     * Executes 3D A* pathfinding using a decoupled [PathEnvironment].
+     */
+    fun findPath(env: PathEnvironment, start: Vec3d, goal: Vec3d, allowedRange: Double = 1.0): PathResult
+
+    /**
      * Registers a temporary dynamic traversal penalty at [pos] to break stuck loops.
      */
     fun penalizeNode(pos: BlockPos, penalty: Float = 50.0f)
@@ -136,11 +141,11 @@ class AStarPathfinder(
     /**
      * Executes 3D A* pathfinding using a decoupled [PathEnvironment].
      */
-    fun findPath(
+    override fun findPath(
         env: PathEnvironment,
         start: Vec3d,
         goal: Vec3d,
-        allowedRange: Double = 1.0
+        allowedRange: Double
     ): PathResult {
         if (start.x.isNaN() || start.y.isNaN() || start.z.isNaN() ||
             goal.x.isNaN() || goal.y.isNaN() || goal.z.isNaN()) {

@@ -18,6 +18,11 @@ object ManualRouteCommand {
 					IntegerArgumentType.getInteger(context, "z"),
 				)
 				HelperConfig.manualRouteGoal = pos
+				val target = com.github.foragerhelper.target.PositionTarget(
+					net.minecraft.util.math.Vec3d(pos.x + 0.5, pos.y.toDouble(), pos.z + 0.5),
+					arrivalRadius = 1.0
+				)
+				com.github.foragerhelper.movement.MovementController.setDestination(target)
 				context.source.sendFeedback(Text.literal("Forager route set to $pos"))
 				1
 			}
@@ -26,6 +31,7 @@ object ManualRouteCommand {
 					.then(argument("y", IntegerArgumentType.integer()).then(destination)))
 				dispatcher.register(route.then(literal("clear").executes { context ->
 				HelperConfig.manualRouteGoal = null
+				com.github.foragerhelper.movement.MovementController.stop()
 				WalkController.stop()
 				context.source.sendFeedback(Text.literal("Forager route cleared"))
 				1
