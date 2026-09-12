@@ -23,7 +23,7 @@ object ManualRouteCommand {
 					arrivalRadius = 1.0
 				)
 				com.github.foragerhelper.movement.MovementController.setDestination(target)
-				context.source.sendFeedback(Text.literal("Forager route set to $pos"))
+				context.source.sendFeedback(Text.literal("Forager route set to (${pos.x}, ${pos.y}, ${pos.z})"))
 				1
 			}
 			val route = literal("forageroute")

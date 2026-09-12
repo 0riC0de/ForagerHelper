@@ -70,16 +70,6 @@ object InputController {
 			openOptions()
 		}
 
-		if (!HelperConfig.enabled) {
-			clearScan(client)
-			return
-		}
-		if (client.currentScreen != null) {
-			// Never keep synthetic movement active while any GUI is open.
-			WalkController.stop(client)
-			return
-		}
-
 		val manualGoal = HelperConfig.manualRouteGoal
 		if (manualGoal != null) {
 			val posTarget = com.github.foragerhelper.target.PositionTarget(
@@ -89,6 +79,20 @@ object InputController {
 				com.github.foragerhelper.movement.MovementController.setDestination(posTarget)
 			}
 			com.github.foragerhelper.movement.MovementController.tick(client)
+			if (com.github.foragerhelper.movement.MovementController.state == com.github.foragerhelper.movement.MovementState.COMPLETED) {
+				HelperConfig.manualRouteGoal = null
+				com.github.foragerhelper.movement.MovementController.stop()
+			}
+			return
+		}
+
+		if (!HelperConfig.enabled) {
+			clearScan(client)
+			return
+		}
+		if (client.currentScreen != null) {
+			// Never keep synthetic movement active while any GUI is open.
+			WalkController.stop(client)
 			return
 		}
 

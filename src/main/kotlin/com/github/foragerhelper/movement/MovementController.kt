@@ -6,6 +6,7 @@ import com.github.foragerhelper.path.PathResult
 import com.github.foragerhelper.path.Pathfinder
 import com.github.foragerhelper.rotation.RotationEngine
 import com.github.foragerhelper.target.NavigationTarget
+import com.github.foragerhelper.target.PositionTarget
 import com.github.foragerhelper.target.TargetEnvironment
 import com.github.foragerhelper.target.WorldTargetEnvironment
 import net.minecraft.client.MinecraftClient
@@ -201,7 +202,7 @@ class DefaultMovementController(
         }
 
         // 3. Interaction Reach check
-        if (target.isInReach(env)) {
+        if (target !is PositionTarget && target.isInReach(env)) {
             state = MovementState.IN_REACH
             rotationEngine.setTarget(target.getFocusPoint(env))
             rotationEngine.setPathTangent(null)
@@ -245,7 +246,15 @@ class DefaultMovementController(
 
         // 6. Check if reached end of waypoints
         if (currentWaypointIndex >= currentWaypoints.size) {
-            if (target.isInReach(env)) {
+            if (target.isCompleted(env)) {
+                state = MovementState.COMPLETED
+                rotationEngine.setTarget(target.getFocusPoint(env))
+                rotationEngine.setPathTangent(null)
+                onDestinationReached?.invoke()
+                lastComputedInput = MovementInput()
+                return lastComputedInput
+            }
+            if (target !is PositionTarget && target.isInReach(env)) {
                 state = MovementState.IN_REACH
                 rotationEngine.setTarget(target.getFocusPoint(env))
                 lastComputedInput = MovementInput()
@@ -288,8 +297,10 @@ class DefaultMovementController(
         val yawRad = Math.toRadians(playerYaw.toDouble())
         val fwdX = -sin(yawRad)
         val fwdZ = cos(yawRad)
-        val rightX = cos(yawRad)
-        val rightZ = sin(yawRad)
+        // In Minecraft coords: +X is East, +Z is South.
+        // Facing South (yaw=0): forward=(0,1), Right (West) is (-1,0), Left (East) is (1,0).
+        val rightX = -cos(yawRad)
+        val rightZ = -sin(yawRad)
 
         val forwardDot = if (dist > 0.01) (dx * fwdX + dz * fwdZ) / dist else 0.0
         val rightDot = if (dist > 0.01) (dx * rightX + dz * rightZ) / dist else 0.0
@@ -342,20 +353,20 @@ class DefaultMovementController(
     }
 
     private fun applyKeys(client: MinecraftClient, input: MovementInput) {
-        client.options.forwardKey.isPressed = input.forward
-        client.options.backKey.isPressed = input.back
-        client.options.leftKey.isPressed = input.left
-        client.options.rightKey.isPressed = input.right
-        client.options.jumpKey.isPressed = input.jump
-        client.options.sneakKey.isPressed = input.sneak
+        client.options.forwardKey.setPressed(input.forward)
+        client.options.backKey.setPressed(input.back)
+        client.options.leftKey.setPressed(input.left)
+        client.options.rightKey.setPressed(input.right)
+        client.options.jumpKey.setPressed(input.jump)
+        client.options.sneakKey.setPressed(input.sneak)
     }
 
     private fun releaseKeys(client: MinecraftClient) {
-        client.options.forwardKey.isPressed = false
-        client.options.backKey.isPressed = false
-        client.options.leftKey.isPressed = false
-        client.options.rightKey.isPressed = false
-        client.options.jumpKey.isPressed = false
-        client.options.sneakKey.isPressed = false
+        client.options.forwardKey.setPressed(false)
+        client.options.backKey.setPressed(false)
+        client.options.leftKey.setPressed(false)
+        client.options.rightKey.setPressed(false)
+        client.options.jumpKey.setPressed(false)
+        client.options.sneakKey.setPressed(false)
     }
 }

@@ -93,13 +93,13 @@ class MovementControllerTest {
 
     @Test
     fun testDecoupledWASD_StrafeRightFacingSouth() {
-        // Yaw = 0 faces South (+Z). Waypoint is at (+5, 64, 0). Right is East (+X).
+        // Yaw = 0 faces South (+Z). Waypoint is at (-5, 64, 0). Right is West (-X).
         env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
-        val target = PositionTarget(Vec3d(5.0, 64.0, 0.0), arrivalRadius = 0.5)
+        val target = PositionTarget(Vec3d(-5.0, 64.0, 0.0), arrivalRadius = 0.5)
         controller.setDestination(target)
 
         val input = controller.tick(env, playerYaw = 0.0f)
-        assertTrue(input.right, "Should strafe right when target is to the right")
+        assertTrue(input.right, "Should strafe right when target is to the right (West)")
         assertFalse(input.forward, "Should not press forward")
         assertFalse(input.left)
         assertFalse(input.back)
@@ -107,13 +107,13 @@ class MovementControllerTest {
 
     @Test
     fun testDecoupledWASD_StrafeLeftFacingSouth() {
-        // Yaw = 0 faces South (+Z). Waypoint is at (-5, 64, 0). Left is West (-X).
+        // Yaw = 0 faces South (+Z). Waypoint is at (+5, 64, 0). Left is East (+X).
         env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
-        val target = PositionTarget(Vec3d(-5.0, 64.0, 0.0), arrivalRadius = 0.5)
+        val target = PositionTarget(Vec3d(5.0, 64.0, 0.0), arrivalRadius = 0.5)
         controller.setDestination(target)
 
         val input = controller.tick(env, playerYaw = 0.0f)
-        assertTrue(input.left, "Should strafe left when target is to the left")
+        assertTrue(input.left, "Should strafe left when target is to the left (East)")
         assertFalse(input.right)
         assertFalse(input.forward)
         assertFalse(input.back)
@@ -135,9 +135,9 @@ class MovementControllerTest {
 
     @Test
     fun testDecoupledWASD_DiagonalForwardRight() {
-        // Yaw = 0 faces South (+Z). Target is at (+5, 64, +5) (South-East).
+        // Yaw = 0 faces South (+Z). Target is at (-5, 64, +5) (South-West = Forward + Right).
         env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
-        val target = PositionTarget(Vec3d(5.0, 64.0, 5.0), arrivalRadius = 0.5)
+        val target = PositionTarget(Vec3d(-5.0, 64.0, 5.0), arrivalRadius = 0.5)
         controller.setDestination(target)
 
         val input = controller.tick(env, playerYaw = 0.0f)
