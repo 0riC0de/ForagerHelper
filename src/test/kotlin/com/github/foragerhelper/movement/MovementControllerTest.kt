@@ -645,4 +645,91 @@ class MovementControllerTest {
         assertTrue(input.sprint, "Must sprint across 2-block parkour gap")
         assertTrue(input.jump, "Must jump when approaching 2-block parkour gap")
     }
+
+    @Test
+    fun testStandingOnDestinationBlockCompletesWithoutOscillating() {
+        // Player stands on block (5, 64, 5) at (5.1, 65.0, 5.1).
+        // Destination target is Vec3d(5.5, 64.0, 5.5).
+        env.playerPosVec = Vec3d(5.1, 65.0, 5.1)
+        val target = PositionTarget(Vec3d(5.5, 64.0, 5.5), arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(Vec3d(5.5, 64.0, 5.5)))
+
+        val input = controller.tick(env, playerYaw = 0.0f)
+        assertEquals(
+            com.github.foragerhelper.movement.MovementState.COMPLETED,
+            controller.state,
+            "Standing on destination block must trigger COMPLETED state immediately"
+        )
+        assertFalse(input.forward, "Completed destination must not move forward")
+        assertFalse(input.back, "Completed destination must not move backward")
+        assertFalse(input.left, "Completed destination must not strafe")
+        assertFalse(input.right, "Completed destination must not strafe")
+    }
+
+    @Test
+    fun testTrappedUnderDestinationPreservesEscapePath() {
+        // Player is at (5.0, 64.0, 0.0) under destination at (5.0, 67.0, 0.0).
+        env.playerPosVec = Vec3d(5.0, 64.0, 0.0)
+        val target = PositionTarget(Vec3d(5.0, 67.0, 0.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+
+        // Setup an escape path leading out and around
+        val escapeWaypoints = listOf(
+            Vec3d(5.0, 64.0, 2.0),
+            Vec3d(7.0, 65.0, 2.0),
+            Vec3d(5.0, 67.0, 0.0)
+        )
+        controller.setWaypointsForTest(escapeWaypoints)
+
+        // Tick once
+        val input1 = controller.tick(env, playerYaw = 0.0f)
+        assertFalse(input1.jump, "Must not jump in place while under overhead ceiling/goal")
+
+        // Player makes slight progress towards waypoint 0 (still under goal horizontally)
+        env.playerPosVec = Vec3d(5.0, 64.0, 0.5)
+        val input2 = controller.tick(env, playerYaw = 0.0f)
+
+        // Crucial verification: waypoints must NOT have been wiped or reset!
+        assertEquals(
+            escapeWaypoints.size,
+            controller.currentWaypoints.size,
+            "Escape path must be preserved across ticks even while player is under destination block"
+        )
+        assertFalse(input2.jump, "Must not jump in place on subsequent ticks")
+    }
+
+    @Test
+    fun testCorridorCornerWaypointsDoNotAdvancePrematurelyIntoWall() {
+        // 1x2 cave corridor along Z (X=0). At Z=4, corridor turns right to X=3.
+        // Corner wall at (1, 65, 3) blocks line of sight to W2=(3, 64, 4).
+        env.playerPosVec = Vec3d(0.0, 64.0, 3.4) // 0.6m from W1 (inside the 0.65m waypoint radius!)
+        env.playerEyePosVec = Vec3d(0.0, 65.62, 3.4)
+        env.setSolid(BlockPos(1, 65, 3))
+
+        val target = PositionTarget(Vec3d(3.0, 64.0, 4.0))
+        controller.setDestination(target)
+        val waypoints = listOf(
+            Vec3d(0.0, 64.0, 1.0),
+            Vec3d(0.0, 64.0, 4.0), // Exit of corridor (index 1)
+            Vec3d(3.0, 64.0, 4.0)  // Around corner (index 2, obscured by wall)
+        )
+        controller.setWaypointsForTest(waypoints, index = 1)
+
+        controller.tick(env, playerYaw = 0.0f)
+
+        assertEquals(
+            1,
+            controller.currentWaypointIndex,
+            "Must NOT advance to next waypoint around corner when obscured by wall; must walk straight out first"
+        )
+
+        val rotEngine = controller.rotationEngine as com.github.foragerhelper.rotation.DefaultRotationEngine
+        val tangent = rotEngine.pathTangentVector
+        assertNotNull(tangent)
+        assertEquals(
+            0.0, tangent!!.x, 0.01,
+            "Path tangent must continue straight along corridor (+Z) and not point into corner wall (+X)"
+        )
+    }
 }

@@ -291,7 +291,15 @@ data class PositionTarget(
         val horizDistSq = dx * dx + dz * dz
         val rSq = arrivalRadius * arrivalRadius
         if (horizDistSq + dy * dy <= rSq) return true
-        return horizDistSq <= rSq && kotlin.math.abs(dy) <= maxOf(arrivalRadius, 1.25)
+        val yTolerated = kotlin.math.abs(dy) <= maxOf(arrivalRadius, 1.25)
+        if (horizDistSq <= rSq && yTolerated) return true
+        // If standing on the exact destination block column (integer block coords), tolerate within block boundaries
+        val playerBlockX = kotlin.math.floor(env.playerPos.x).toInt()
+        val playerBlockZ = kotlin.math.floor(env.playerPos.z).toInt()
+        val targetBlockX = kotlin.math.floor(position.x).toInt()
+        val targetBlockZ = kotlin.math.floor(position.z).toInt()
+        val onSameBlockColumn = playerBlockX == targetBlockX && playerBlockZ == targetBlockZ
+        return onSameBlockColumn && arrivalRadius >= 0.5 && yTolerated
     }
 
     override fun isValid(env: TargetEnvironment): Boolean = true

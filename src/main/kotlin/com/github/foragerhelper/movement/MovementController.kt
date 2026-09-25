@@ -4,6 +4,7 @@ import com.github.foragerhelper.path.AStarPathfinder
 import com.github.foragerhelper.path.PathEnvironment
 import com.github.foragerhelper.path.PathResult
 import com.github.foragerhelper.path.Pathfinder
+import com.github.foragerhelper.path.WorldPathEnvironment
 import com.github.foragerhelper.rotation.RotationEngine
 import com.github.foragerhelper.target.BlockTarget
 import com.github.foragerhelper.target.NavigationTarget
@@ -139,9 +140,9 @@ class DefaultMovementController(
         state = MovementState.PATHING
     }
 
-    fun setWaypointsForTest(waypoints: List<Vec3d>) {
+    fun setWaypointsForTest(waypoints: List<Vec3d>, index: Int = 0) {
         this.currentWaypoints = waypoints
-        this.currentWaypointIndex = 0
+        this.currentWaypointIndex = index
         this.ticksSincePath = 0
     }
 
@@ -228,10 +229,12 @@ class DefaultMovementController(
         if (isUnderDestination) {
             // Player trapped below destination block (e.g. failed parkour jump)
             pathfinder.penalizeNode(BlockPos.ofFloored(env.playerPos.x, env.playerPos.y, env.playerPos.z), 50.0f)
-            currentWaypoints = emptyList()
-            currentWaypointIndex = 0
-            ticksSincePath = repathIntervalTicks
-            computePath(env, goalPos)
+            if (currentWaypoints.isEmpty() || currentWaypointIndex >= currentWaypoints.size || ticksSincePath >= repathIntervalTicks) {
+                currentWaypoints = emptyList()
+                currentWaypointIndex = 0
+                ticksSincePath = repathIntervalTicks
+                computePath(env, goalPos)
+            }
         }
 
         ticksSincePath++
@@ -255,14 +258,28 @@ class DefaultMovementController(
             val dy = wp.y - env.playerPos.y
             val distSq = dx * dx + dz * dz
 
-            val reachedFlat = distSq <= waypointRadius * waypointRadius && Math.abs(dy) <= 1.25
+            val hasNextWp = currentWaypointIndex < currentWaypoints.size - 1
+            val nextWpVisible = if (hasNextWp) {
+                val nextWp = currentWaypoints[currentWaypointIndex + 1]
+                val nextEye = Vec3d(nextWp.x, nextWp.y + 1.3, nextWp.z)
+                hasLineOfSightRay(env, env.playerEyePos, nextEye)
+            } else true
+
+            // Corner wall protection: if turning around an obscured corner, do not cut corner early
+            val effectiveRadius = if (!nextWpVisible) 0.35 else waypointRadius
+            val reachedFlat = distSq <= effectiveRadius * effectiveRadius && Math.abs(dy) <= 1.25
+
             // Safe drop progression: advance intermediate drop waypoint if aligned horizontally and safe
-            val reachedDrop = currentWaypointIndex < currentWaypoints.size - 1 &&
+            val reachedDrop = hasNextWp &&
                 distSq <= (waypointRadius * 1.5) * (waypointRadius * 1.5) &&
                 dy in -3.5..-0.5 && isDropSafe(env, wp)
+
             // Intermediate looking block overhead: if horizontally aligned under looking block, count as traversed and continue
-            val reachedUnderLookingBlock = currentWaypointIndex < currentWaypoints.size - 1 &&
-                distSq <= waypointRadius * waypointRadius && dy > 0.0
+            val reachedUnderLookingBlock = hasNextWp &&
+                (distSq <= maxOf(waypointRadius * waypointRadius, 0.8) ||
+                 (kotlin.math.floor(env.playerPos.x).toInt() == kotlin.math.floor(wp.x).toInt() &&
+                  kotlin.math.floor(env.playerPos.z).toInt() == kotlin.math.floor(wp.z).toInt())) &&
+                dy > 0.0
 
             if (reachedFlat || reachedDrop || reachedUnderLookingBlock) {
                 currentWaypointIndex++
@@ -272,10 +289,17 @@ class DefaultMovementController(
         }
 
         // 6. Check if reached end of waypoints
-        if (currentWaypointIndex >= currentWaypoints.size) {
-            val distToGoal = sqrt(distToGoalSq)
-            val isNearGoal = distToGoal <= maxOf(waypointRadius, (target as? PositionTarget)?.arrivalRadius ?: 0.65) && Math.abs(dyToGoal) <= 1.25
+        val playerBlockX = kotlin.math.floor(env.playerPos.x).toInt()
+        val playerBlockZ = kotlin.math.floor(env.playerPos.z).toInt()
+        val goalBlockX = kotlin.math.floor(goalPos.x).toInt()
+        val goalBlockZ = kotlin.math.floor(goalPos.z).toInt()
+        val onGoalBlock = playerBlockX == goalBlockX && playerBlockZ == goalBlockZ && Math.abs(dyToGoal) <= 1.5
 
+        val distToGoal = sqrt(distToGoalSq)
+        val arrivalLimit = maxOf(waypointRadius, (target as? PositionTarget)?.arrivalRadius ?: 0.65, 0.75)
+        val isNearGoal = (distToGoal <= arrivalLimit || onGoalBlock) && Math.abs(dyToGoal) <= 1.5
+
+        if (currentWaypointIndex >= currentWaypoints.size || (currentWaypoints.isNotEmpty() && currentWaypointIndex == currentWaypoints.lastIndex && onGoalBlock)) {
             if (target.isCompleted(env) || (target is PositionTarget && isNearGoal)) {
                 state = MovementState.COMPLETED
                 rotationEngine.setTarget(target.getFocusPoint(env))
@@ -340,7 +364,8 @@ class DefaultMovementController(
         val rightDot = if (dist > 0.01) (dx * rightX + dz * rightZ) / dist else 0.0
 
         // Arrival deadzone: prevent rapid oscillation on the end block
-        val inDeadzone = dist < 0.20
+        val inArrivalZone = dist < 0.35 || (target is PositionTarget && (distToGoal < 0.40 || onGoalBlock) && currentWaypointIndex >= currentWaypoints.lastIndex)
+        val inDeadzone = inArrivalZone || dist < 0.20
 
         val moveFwd = !inDeadzone && forwardDot > 0.38
         // Only move backward if far from waypoint (> 0.8m) to avoid overshoot flip-flopping
@@ -359,12 +384,22 @@ class DefaultMovementController(
         // Parkour and jump logic
         val isGap = isParkourGap(env, targetWp)
         val isSafeDrop = dy in -3.5..-0.5 && isDropSafe(env, targetWp)
-        val jump = (!isUnderDestination && dy > 0.5 && !isSafeDrop) || (isGap && forwardDot > 0.65 && dist in 0.8..3.5)
+
+        val isNearEdge = if (isGap && dist > 0.01) {
+            val dirX = dx / dist
+            val dirZ = dz / dist
+            val probePos = BlockPos.ofFloored(env.playerPos.x + dirX * 0.65, env.playerPos.y, env.playerPos.z + dirZ * 0.65)
+            env.isAir(probePos) && env.isAir(probePos.down())
+        } else false
+
+        val canStepUp = dy in 0.5..1.25 && !isSafeDrop
+        val parkourJump = isGap && forwardDot > 0.65 && (isNearEdge || dist in 0.8..3.5)
+        val jump = !isUnderDestination && (canStepUp || parkourJump)
         val sprint = (isGap && forwardDot > 0.3) || (moveFwd && forwardDot > 0.82 && dist > 3.0) || (isSafeDrop && dist < 1.0)
 
         // 9. Camera orientation update: line-of-sight aware lookahead
         val maxLookAhead = 3
-        var bestLookIndex = currentWaypointIndex
+        var bestLookIndex: Int? = null
         if (currentWaypoints.isNotEmpty()) {
             val upperLimit = minOf(currentWaypointIndex + maxLookAhead, currentWaypoints.size - 1)
             for (idx in currentWaypointIndex..upperLimit) {
@@ -379,25 +414,42 @@ class DefaultMovementController(
             }
         }
 
-        val lookWp = if (currentWaypoints.isNotEmpty() && bestLookIndex in currentWaypoints.indices) {
-            currentWaypoints[bestLookIndex]
+        val lookAheadTangent: Vec3d?
+        val partFocusPoint: Vec3d?
+
+        if (bestLookIndex != null) {
+            val lookWp = currentWaypoints[bestLookIndex]
+            val twpX = lookWp.x - env.playerPos.x
+            val twpY = (lookWp.y + 1.3) - env.playerEyePos.y
+            val twpZ = lookWp.z - env.playerPos.z
+            // If player slightly overshot this waypoint within arrival deadzone, do not flip tangent backwards
+            if (dist < 0.35 && forwardDot < 0.0) {
+                lookAheadTangent = Vec3d(fwdX, 0.0, fwdZ)
+            } else {
+                lookAheadTangent = Vec3d(twpX, twpY, twpZ)
+            }
+            partFocusPoint = Vec3d(lookWp.x, lookWp.y + 1.3, lookWp.z)
+        } else if (currentWaypoints.isNotEmpty()) {
+            // Future waypoints obscured by wall: walk straight along corridor tangent to get out of the way!
+            val wp = currentWaypoints[currentWaypointIndex]
+            lookAheadTangent = Vec3d(
+                wp.x - env.playerPos.x,
+                0.0,
+                wp.z - env.playerPos.z
+            )
+            partFocusPoint = null
         } else {
-            targetWp
+            val focus = target.getFocusPoint(env)
+            val canSeeGoal = focus != null && hasLineOfSightRay(env, env.playerEyePos, focus)
+            lookAheadTangent = Vec3d(
+                goalPos.x - env.playerPos.x,
+                goalPos.y - env.playerPos.y,
+                goalPos.z - env.playerPos.z
+            )
+            partFocusPoint = if (canSeeGoal) focus else null
         }
 
-        val lookAheadTangent = Vec3d(
-            lookWp.x - env.playerPos.x,
-            (lookWp.y + 1.3) - env.playerEyePos.y,
-            lookWp.z - env.playerPos.z
-        )
         rotationEngine.setPathTangent(lookAheadTangent)
-
-        // While navigating along path parts, focus camera on upcoming part target if visible
-        val partFocusPoint = if (currentWaypoints.isNotEmpty()) {
-            Vec3d(lookWp.x, lookWp.y + 1.3, lookWp.z)
-        } else {
-            target.getFocusPoint(env)
-        }
 
         val canSeeFocus = partFocusPoint != null &&
             !isUnderDestination &&
@@ -434,7 +486,7 @@ class DefaultMovementController(
         val dx = targetWp.x - env.playerPos.x
         val dz = targetWp.z - env.playerPos.z
         val horizDist = sqrt(dx * dx + dz * dz)
-        if (horizDist !in 1.25..3.8) return false
+        if (horizDist !in 1.25..4.2) return false
         val dirX = dx / horizDist
         val dirZ = dz / horizDist
         val maxSteps = kotlin.math.floor(horizDist - 0.4).toInt()
@@ -456,7 +508,7 @@ class DefaultMovementController(
         val dist = sqrt(dx * dx + dy * dy + dz * dz)
         if (dist < 0.1) return true
 
-        val steps = maxOf(1, kotlin.math.ceil(dist / 0.25).toInt())
+        val steps = maxOf(1, kotlin.math.ceil(dist / 0.20).toInt())
         val stepX = dx / steps
         val stepY = dy / steps
         val stepZ = dz / steps
@@ -465,7 +517,8 @@ class DefaultMovementController(
         val startBlock = BlockPos.ofFloored(from.x, from.y, from.z)
         var prevBlock: BlockPos? = null
 
-        val pathEnv = pathEnvironmentProvider?.invoke(env) ?: (env as? PathEnvironment)
+        val pathEnv = pathEnvironmentProvider?.invoke(env) ?: (env as? PathEnvironment) ?:
+            (if (env is WorldTargetEnvironment) WorldPathEnvironment(env.world) else null)
 
         for (i in 1 until steps) {
             val cx = from.x + stepX * i
@@ -477,9 +530,6 @@ class DefaultMovementController(
 
             if (pathEnv != null) {
                 if (pathEnv.isSolid(block)) return false
-            } else if (env is WorldTargetEnvironment) {
-                val state = env.world.getBlockState(block)
-                if (state.isSolidBlock(env.world, block)) return false
             } else {
                 if (!env.isAir(block)) return false
             }
