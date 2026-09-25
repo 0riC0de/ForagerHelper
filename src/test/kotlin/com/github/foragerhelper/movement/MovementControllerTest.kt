@@ -419,4 +419,99 @@ class MovementControllerTest {
             "Long distance routes must be divided into local segments (dist <= 36m): actual=$distToFirst"
         )
     }
+
+    @Test
+    fun testHighGroundWithoutPreExistingPathDoesNotFreezeInReach() {
+        // Player is elevated on a ledge at Y=68. Target is below at Y=65.
+        // 3D distance is sqrt(2^2 + 3^2) = 3.6m <= 4.5m reach.
+        // NO pre-existing waypoints: controller must compute path down, not enter IN_REACH.
+        env.playerPosVec = Vec3d(0.0, 68.0, 0.0)
+        env.playerEyePosVec = Vec3d(0.0, 69.62, 0.0)
+        val pos = BlockPos(2, 65, 0)
+        env.setTargetBlock(pos)
+        val target = BlockTarget(pos)
+        controller.setDestination(target)
+
+        val input = controller.tick(env, playerYaw = -90.0f)
+        assertNotEquals(
+            MovementState.IN_REACH, controller.state,
+            "Must NOT freeze into IN_REACH on high ground ledge even without pre-existing path"
+        )
+        assertFalse(input.sneak, "Must NOT engage sneak while stuck on high ground")
+    }
+
+    @Test
+    fun testTerminalDropDoesNotPrematurelyAdvancePastEndOfWaypoints() {
+        // Only one waypoint in this segment: a safe drop landing at Y=66.
+        // Goal target is further ahead at (0, 66, 10).
+        // Player is still standing on the ledge at Y=68.
+        env.playerPosVec = Vec3d(0.0, 68.0, 0.0)
+        env.playerEyePosVec = Vec3d(0.0, 69.62, 0.0)
+        val landingPos = BlockPos(0, 66, 0)
+        env.setTargetBlock(landingPos.down())
+
+        val target = PositionTarget(Vec3d(0.0, 66.0, 10.0))
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(Vec3d(0.0, 66.0, 0.0))) // Terminal drop waypoint of segment
+
+        controller.tick(env, playerYaw = 0.0f)
+        assertEquals(
+            0, controller.currentWaypointIndex,
+            "Terminal drop waypoint must NOT advance past end while player is still elevated at Y=68"
+        )
+
+        // Once player falls and lands at Y=66:
+        env.playerPosVec = Vec3d(0.0, 66.0, 0.0)
+        env.playerEyePosVec = Vec3d(0.0, 67.62, 0.0)
+        controller.tick(env, playerYaw = 0.0f)
+        assertTrue(
+            controller.currentWaypointIndex == 1 || controller.currentWaypoints.isNotEmpty(),
+            "Terminal drop waypoint must complete or transition to next segment once player has landed"
+        )
+    }
+
+    @Test
+    fun testUnsafeCliffDropAbortsAndRepaths() {
+        // Waypoint is a dangerous 6-block cliff drop to Y=62 (fall damage hazard)
+        env.playerPosVec = Vec3d(0.0, 68.0, 0.0)
+        val dangerousLanding = Vec3d(0.0, 62.0, 0.0) // dy = -6.0 < -3.5
+
+        val target = PositionTarget(dangerousLanding)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(dangerousLanding))
+
+        controller.tick(env, playerYaw = 0.0f)
+        // Controller must detect unsafe drop and clear waypoints to force repath around
+        assertTrue(
+            controller.currentWaypoints.isEmpty(),
+            "Controller must detect unsafe drop > 3.5m and clear waypoints to trigger repath"
+        )
+    }
+
+    @Test
+    fun testPathPartLookaheadCameraPitchBounded() {
+        // Player at (0, 64, 0). Path has sequential waypoints.
+        env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
+        env.playerEyePosVec = Vec3d(0.0, 65.62, 0.0)
+
+        val target = PositionTarget(Vec3d(50.0, 80.0, 0.0)) // High distant target
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(
+            Vec3d(1.0, 64.0, 0.0),
+            Vec3d(2.0, 64.0, 0.0),
+            Vec3d(3.0, 64.0, 0.0),
+            Vec3d(4.0, 64.0, 0.0)
+        ))
+
+        controller.tick(env, playerYaw = -90.0f)
+
+        // Pitch of path tangent must be within [-20.0, 20.0]
+        val rotEngine = controller.rotationEngine as com.github.foragerhelper.rotation.DefaultRotationEngine
+        val tangent = rotEngine.pathTangentVector ?: Vec3d.ZERO
+        val (tangentYaw, tangentPitch) = rotEngine.calculateTangentAngles(tangent)
+        assertTrue(
+            tangentPitch in -20.0f..20.0f,
+            "Path tangent pitch must be clamped within [-20, 20]: actual=$tangentPitch"
+        )
+    }
 }

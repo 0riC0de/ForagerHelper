@@ -6,6 +6,7 @@ import com.github.foragerhelper.waypoint.Waypoint
 import com.github.foragerhelper.waypoint.WaypointManager
 import foraginghelpermod.client.HelperConfig
 import net.minecraft.client.MinecraftClient
+import net.minecraft.util.math.BlockPos
 import net.minecraft.client.gui.Click
 import net.minecraft.client.gui.DrawContext
 import net.minecraft.client.gui.screen.Screen
@@ -394,6 +395,13 @@ class HelperOptionsScreen : Screen(Text.translatable("screen.oriforaginhelpermod
 			}
 		}
 
+		// Prevent content misclicks during active tab sliding transition
+		val now = Util.getMeasuringTimeMs()
+		val tabElapsed = (now - tabSwitchStartMs).toFloat()
+		if (tabSwitchStartMs > 0L && tabElapsed < TAB_ANIM_MS) {
+			return true
+		}
+
 		val contentTop = panelY.roundToInt() + HEADER_HEIGHT + TAB_BAR_HEIGHT
 
 		// 2. Options Tab clicks
@@ -431,6 +439,8 @@ class HelperOptionsScreen : Screen(Text.translatable("screen.oriforaginhelpermod
 				val travelX = panelX.roundToInt() + panelW - 16 - 24 - travelW
 				val travelY = rowY + 7
 				if (mx in travelX until (travelX + travelW) && my in travelY until (travelY + travelH)) {
+					val targetPos = BlockPos.ofFloored(wp.x, wp.y, wp.z)
+					HelperConfig.manualRouteGoal = targetPos
 					MovementController.setDestination(PositionTarget(wp.posVec, arrivalRadius = 1.0))
 					HelperConfig.autoWalk = true
 					requestClose()

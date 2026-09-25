@@ -72,10 +72,11 @@ object InputController {
 
 		val manualGoal = HelperConfig.manualRouteGoal
 		if (manualGoal != null) {
-			val posTarget = com.github.foragerhelper.target.PositionTarget(
-				Vec3d(manualGoal.x + 0.5, manualGoal.y.toDouble(), manualGoal.z + 0.5)
-			)
-			if (com.github.foragerhelper.movement.MovementController.activeTarget != posTarget) {
+			val active = com.github.foragerhelper.movement.MovementController.activeTarget
+			if (active !is com.github.foragerhelper.target.PositionTarget) {
+				val posTarget = com.github.foragerhelper.target.PositionTarget(
+					Vec3d(manualGoal.x + 0.5, manualGoal.y.toDouble(), manualGoal.z + 0.5)
+				)
 				com.github.foragerhelper.movement.MovementController.setDestination(posTarget)
 			}
 			com.github.foragerhelper.movement.MovementController.tick(client)

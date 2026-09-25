@@ -204,8 +204,9 @@ class DefaultMovementController(
         }
 
         // 3. Interaction Reach check: do not prematurely freeze on high ground if still following path
+        val targetPos = target.getTargetPos(env)
         val isNavigatingPath = currentWaypoints.isNotEmpty() && currentWaypointIndex < currentWaypoints.size - 1
-        val isHighGroundLedge = target is BlockTarget && (env.playerPos.y - target.blockPos.y.toDouble()) > 1.8
+        val isHighGroundLedge = targetPos != null && (env.playerPos.y - targetPos.y) > 1.6
         if (target !is PositionTarget && target.isInReach(env) && !isNavigatingPath && !isHighGroundLedge) {
             state = MovementState.IN_REACH
             rotationEngine.setTarget(target.getFocusPoint(env))
@@ -214,7 +215,7 @@ class DefaultMovementController(
             return lastComputedInput
         }
 
-        val goalPos = target.getTargetPos(env)
+        val goalPos = targetPos
         if (goalPos == null) {
             stop()
             return MovementInput()
@@ -242,7 +243,10 @@ class DefaultMovementController(
             val distSq = dx * dx + dz * dz
 
             val reachedFlat = distSq <= waypointRadius * waypointRadius && Math.abs(dy) <= 1.25
-            val reachedDrop = distSq <= (waypointRadius * 1.5) * (waypointRadius * 1.5) && dy in -3.5..-0.5 && isDropSafe(env, wp)
+            // Safe drop progression: advance intermediate drop waypoint if aligned horizontally and safe
+            val reachedDrop = currentWaypointIndex < currentWaypoints.size - 1 &&
+                distSq <= (waypointRadius * 1.5) * (waypointRadius * 1.5) &&
+                dy in -3.5..-0.5 && isDropSafe(env, wp)
 
             if (reachedFlat || reachedDrop) {
                 currentWaypointIndex++
@@ -261,14 +265,18 @@ class DefaultMovementController(
                 lastComputedInput = MovementInput()
                 return lastComputedInput
             }
-            if (target !is PositionTarget && target.isInReach(env)) {
+            if (target !is PositionTarget && target.isInReach(env) && !isHighGroundLedge) {
                 state = MovementState.IN_REACH
                 rotationEngine.setTarget(target.getFocusPoint(env))
+                rotationEngine.setPathTangent(null)
                 lastComputedInput = MovementInput()
                 return lastComputedInput
             }
-            // Trigger path re-evaluation on next tick to get closer
+            // Transition to next segment of multi-part route
+            currentWaypoints = emptyList()
+            currentWaypointIndex = 0
             ticksSincePath = repathIntervalTicks
+            computePath(env, goalPos)
         }
 
         // 7. Unstuck evaluation
@@ -317,19 +325,40 @@ class DefaultMovementController(
         val moveRight = rightDot > 0.38
         val moveLeft = rightDot < -0.38
 
+        // Fallsafe: unsafe drop abort check
+        val isUnsafeDrop = dy < -3.5
+        if (isUnsafeDrop && dist < 1.5) {
+            // Unsafe cliff drop: trigger repath to find safe route around
+            ticksSincePath = repathIntervalTicks
+            currentWaypoints = emptyList()
+        }
+
         // Parkour and jump logic
         val isGap = isParkourGap(env, targetWp)
-        val jump = dy > 0.5 || (isGap && forwardDot > 0.65 && dist in 0.8..3.2)
-        val sprint = (isGap && forwardDot > 0.5) || (moveFwd && forwardDot > 0.82 && dist > 3.0)
+        val isSafeDrop = dy in -3.5..-0.5 && isDropSafe(env, targetWp)
+        val jump = (dy > 0.5 && !isSafeDrop) || (isGap && forwardDot > 0.65 && dist in 0.8..3.2)
+        val sprint = (isGap && forwardDot > 0.5) || (moveFwd && forwardDot > 0.82 && dist > 3.0) || (isSafeDrop && dist < 1.0)
 
-        // Drop handling: when dropping down safely, ensure sneak is released completely
-        val isDropping = dy in -3.5..-0.5
+        // 9. Camera orientation update: divide path into parts and focus on upcoming part
+        val lookAheadSteps = 3
+        val lookWpIndex = minOf(currentWaypointIndex + lookAheadSteps, currentWaypoints.size - 1)
+        val lookWp = if (currentWaypoints.isNotEmpty() && lookWpIndex >= 0) currentWaypoints[lookWpIndex] else targetWp
 
-        // 9. Camera orientation update
-        val lookWp = currentWaypoints.getOrNull(minOf(currentWaypointIndex + 1, currentWaypoints.size - 1)) ?: targetWp
-        val lookAheadTangent = Vec3d(lookWp.x - env.playerPos.x, (lookWp.y + 0.5) - env.playerEyePos.y, lookWp.z - env.playerPos.z)
+        val lookAheadTangent = Vec3d(
+            lookWp.x - env.playerPos.x,
+            (lookWp.y + 1.3) - env.playerEyePos.y,
+            lookWp.z - env.playerPos.z
+        )
         rotationEngine.setPathTangent(lookAheadTangent)
-        rotationEngine.setTarget(target.getFocusPoint(env))
+
+        // While navigating along path parts, focus camera on upcoming part target
+        // Only focus on interaction target when nearing completion
+        val partFocusPoint = if (currentWaypoints.isNotEmpty()) {
+            Vec3d(lookWp.x, lookWp.y + 1.3, lookWp.z)
+        } else {
+            target.getFocusPoint(env)
+        }
+        rotationEngine.setTarget(partFocusPoint)
 
         val input = MovementInput(
             forward = moveFwd,
@@ -362,6 +391,19 @@ class DefaultMovementController(
         return env.isAir(midPos) && env.isAir(midPos.down())
     }
 
+    private fun findStandHeightNear(pathEnv: PathEnvironment?, x: Double, refY: Double, z: Double): Double? {
+        if (pathEnv == null) return null
+        val basePos = BlockPos.ofFloored(x, refY, z)
+        pathEnv.getStandHeight(basePos)?.let { return it }
+        for (offset in 1..12) {
+            val downPos = basePos.down(offset)
+            pathEnv.getStandHeight(downPos)?.let { return it }
+            val upPos = basePos.up(offset)
+            pathEnv.getStandHeight(upPos)?.let { return it }
+        }
+        return null
+    }
+
     private fun computePath(env: TargetEnvironment, goalPos: Vec3d) {
         ticksSincePath = 0
         lastGoalPos = goalPos
@@ -374,11 +416,10 @@ class DefaultMovementController(
             // Segment the route into local human-like parts along the heading
             val dirX = (goalPos.x - env.playerPos.x) / totalDist
             val dirZ = (goalPos.z - env.playerPos.z) / totalDist
-            val segDist = minOf(32.0, totalDist)
+            val segDist = minOf(30.0, totalDist)
             val subX = env.playerPos.x + dirX * segDist
             val subZ = env.playerPos.z + dirZ * segDist
-            val approxPos = BlockPos.ofFloored(subX, env.playerPos.y, subZ)
-            val standY = pathEnv?.getStandHeight(approxPos) ?: env.playerPos.y
+            val standY = findStandHeightNear(pathEnv, subX, env.playerPos.y, subZ) ?: env.playerPos.y
             Vec3d(subX, standY, subZ)
         } else {
             goalPos
@@ -394,7 +435,7 @@ class DefaultMovementController(
             currentWaypoints = result.waypoints
             currentWaypointIndex = 0
         } else {
-            if (currentWaypoints.isEmpty()) {
+            if (currentWaypoints.isEmpty() || currentWaypointIndex >= currentWaypoints.size) {
                 currentWaypoints = listOf(planningGoal)
                 currentWaypointIndex = 0
             }

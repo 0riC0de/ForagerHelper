@@ -360,7 +360,8 @@ class DefaultRotationEngine(
             }
             distance <= reachDistance -> {
                 state = RotationState.TARGET_FOCUS
-                Pair(focusYaw, focusPitch)
+                val clampedPitch = MathHelper.clamp(focusPitch, -20.0f, 20.0f)
+                Pair(focusYaw, clampedPitch)
             }
             else -> {
                 state = RotationState.BLENDING
@@ -369,7 +370,7 @@ class DefaultRotationEngine(
 
                 val deltaYaw = MathHelper.wrapDegrees(focusYaw - tangentYaw)
                 val blendedYaw = MathHelper.wrapDegrees(tangentYaw + deltaYaw * w)
-                val blendedPitch = MathHelper.clamp(tangentPitch + (focusPitch - tangentPitch) * w, -25.0f, 25.0f)
+                val blendedPitch = MathHelper.clamp(tangentPitch + (focusPitch - tangentPitch) * w, -20.0f, 20.0f)
                 Pair(blendedYaw, blendedPitch)
             }
         }
@@ -377,15 +378,15 @@ class DefaultRotationEngine(
 
     /**
      * Calculates natural look angles along a path tangent vector.
-     * Clamps pitch to [-25.0, 25.0] to prevent staring at the ground or sky during navigation.
+     * Clamps pitch to [-20.0, 20.0] to prevent staring at the ground or sky during navigation.
      */
     fun calculateTangentAngles(tangent: Vec3d): Pair<Float, Float> {
         val horiz = sqrt(tangent.x * tangent.x + tangent.z * tangent.z)
-        if (horiz < 1e-5) {
+        if (horiz < 1e-4) {
             return Pair(currentYaw, 0.0f)
         }
         val yaw = MathHelper.wrapDegrees(Math.toDegrees(atan2(-tangent.x, tangent.z)).toFloat())
-        val pitch = MathHelper.clamp(Math.toDegrees(-atan2(tangent.y, horiz)).toFloat(), -25.0f, 25.0f)
+        val pitch = MathHelper.clamp(Math.toDegrees(-atan2(tangent.y, horiz)).toFloat(), -20.0f, 20.0f)
         return Pair(yaw, pitch)
     }
 

@@ -19,7 +19,11 @@ object DebugWorldOverlay {
 	fun register() {
 		WorldRenderEvents.END_EXTRACTION.register { context ->
 			val client = MinecraftClient.getInstance()
-			if (!HelperConfig.enabled || !HelperConfig.showPathOverlay || client.player == null) return@register
+			val hasActiveRoute = MovementController.isNavigating ||
+				MovementController.currentWaypoints.isNotEmpty() ||
+				HelperConfig.manualRouteGoal != null ||
+				WalkController.path.isNotEmpty()
+			if ((!HelperConfig.enabled && !hasActiveRoute) || !HelperConfig.showPathOverlay || client.player == null) return@register
 
 			context.worldRenderer().startDrawingGizmos().use {
 				val waypoints = MovementController.currentWaypoints
