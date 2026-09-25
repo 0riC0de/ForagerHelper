@@ -36,6 +36,16 @@ object ManualRouteCommand {
 				context.source.sendFeedback(Text.literal("Forager route cleared"))
 				1
 			}))
+
+			val openGuiAction: () -> Int = {
+				val client = net.minecraft.client.MinecraftClient.getInstance()
+				client.send {
+					InputController.openOptions()
+				}
+				1
+			}
+			dispatcher.register(literal("forager").executes { openGuiAction() })
+			dispatcher.register(literal("foragergui").executes { openGuiAction() })
 		}
 	}
 }
