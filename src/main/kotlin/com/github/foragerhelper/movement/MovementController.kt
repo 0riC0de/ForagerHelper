@@ -221,6 +221,19 @@ class DefaultMovementController(
             return MovementInput()
         }
 
+        val distToGoalSq = (goalPos.x - env.playerPos.x) * (goalPos.x - env.playerPos.x) + (goalPos.z - env.playerPos.z) * (goalPos.z - env.playerPos.z)
+        val dyToGoal = goalPos.y - env.playerPos.y
+        val isUnderDestination = distToGoalSq <= 2.25 && dyToGoal > 1.25
+
+        if (isUnderDestination) {
+            // Player trapped below destination block (e.g. failed parkour jump)
+            pathfinder.penalizeNode(BlockPos.ofFloored(env.playerPos.x, env.playerPos.y, env.playerPos.z), 50.0f)
+            currentWaypoints = emptyList()
+            currentWaypointIndex = 0
+            ticksSincePath = repathIntervalTicks
+            computePath(env, goalPos)
+        }
+
         ticksSincePath++
 
         // 4. Path computation / periodic re-routing
@@ -234,7 +247,7 @@ class DefaultMovementController(
             computePath(env, goalPos)
         }
 
-        // 5. Waypoint progression with fallsafe drop support
+        // 5. Waypoint progression with fallsafe drop support and looking-block traverse
         while (currentWaypointIndex < currentWaypoints.size) {
             val wp = currentWaypoints[currentWaypointIndex]
             val dx = wp.x - env.playerPos.x
@@ -247,8 +260,11 @@ class DefaultMovementController(
             val reachedDrop = currentWaypointIndex < currentWaypoints.size - 1 &&
                 distSq <= (waypointRadius * 1.5) * (waypointRadius * 1.5) &&
                 dy in -3.5..-0.5 && isDropSafe(env, wp)
+            // Intermediate looking block overhead: if horizontally aligned under looking block, count as traversed and continue
+            val reachedUnderLookingBlock = currentWaypointIndex < currentWaypoints.size - 1 &&
+                distSq <= waypointRadius * waypointRadius && dy > 0.0
 
-            if (reachedFlat || reachedDrop) {
+            if (reachedFlat || reachedDrop || reachedUnderLookingBlock) {
                 currentWaypointIndex++
             } else {
                 break
@@ -257,7 +273,10 @@ class DefaultMovementController(
 
         // 6. Check if reached end of waypoints
         if (currentWaypointIndex >= currentWaypoints.size) {
-            if (target.isCompleted(env)) {
+            val distToGoal = sqrt(distToGoalSq)
+            val isNearGoal = distToGoal <= maxOf(waypointRadius, (target as? PositionTarget)?.arrivalRadius ?: 0.65) && Math.abs(dyToGoal) <= 1.25
+
+            if (target.isCompleted(env) || (target is PositionTarget && isNearGoal)) {
                 state = MovementState.COMPLETED
                 rotationEngine.setTarget(target.getFocusPoint(env))
                 rotationEngine.setPathTangent(null)
@@ -320,10 +339,14 @@ class DefaultMovementController(
         val forwardDot = if (dist > 0.01) (dx * fwdX + dz * fwdZ) / dist else 0.0
         val rightDot = if (dist > 0.01) (dx * rightX + dz * rightZ) / dist else 0.0
 
-        val moveFwd = forwardDot > 0.38
-        val moveBack = forwardDot < -0.38
-        val moveRight = rightDot > 0.38
-        val moveLeft = rightDot < -0.38
+        // Arrival deadzone: prevent rapid oscillation on the end block
+        val inDeadzone = dist < 0.20
+
+        val moveFwd = !inDeadzone && forwardDot > 0.38
+        // Only move backward if far from waypoint (> 0.8m) to avoid overshoot flip-flopping
+        val moveBack = !inDeadzone && dist > 0.8 && forwardDot < -0.38
+        val moveRight = !inDeadzone && rightDot > 0.38
+        val moveLeft = !inDeadzone && rightDot < -0.38
 
         // Fallsafe: unsafe drop abort check
         val isUnsafeDrop = dy < -3.5
@@ -336,13 +359,31 @@ class DefaultMovementController(
         // Parkour and jump logic
         val isGap = isParkourGap(env, targetWp)
         val isSafeDrop = dy in -3.5..-0.5 && isDropSafe(env, targetWp)
-        val jump = (dy > 0.5 && !isSafeDrop) || (isGap && forwardDot > 0.65 && dist in 0.8..3.2)
-        val sprint = (isGap && forwardDot > 0.5) || (moveFwd && forwardDot > 0.82 && dist > 3.0) || (isSafeDrop && dist < 1.0)
+        val jump = (!isUnderDestination && dy > 0.5 && !isSafeDrop) || (isGap && forwardDot > 0.65 && dist in 0.8..3.5)
+        val sprint = (isGap && forwardDot > 0.3) || (moveFwd && forwardDot > 0.82 && dist > 3.0) || (isSafeDrop && dist < 1.0)
 
-        // 9. Camera orientation update: divide path into parts and focus on upcoming part
-        val lookAheadSteps = 3
-        val lookWpIndex = minOf(currentWaypointIndex + lookAheadSteps, currentWaypoints.size - 1)
-        val lookWp = if (currentWaypoints.isNotEmpty() && lookWpIndex >= 0) currentWaypoints[lookWpIndex] else targetWp
+        // 9. Camera orientation update: line-of-sight aware lookahead
+        val maxLookAhead = 3
+        var bestLookIndex = currentWaypointIndex
+        if (currentWaypoints.isNotEmpty()) {
+            val upperLimit = minOf(currentWaypointIndex + maxLookAhead, currentWaypoints.size - 1)
+            for (idx in currentWaypointIndex..upperLimit) {
+                val candidateWp = currentWaypoints[idx]
+                val eyeTarget = Vec3d(candidateWp.x, candidateWp.y + 1.3, candidateWp.z)
+                if (hasLineOfSightRay(env, env.playerEyePos, eyeTarget)) {
+                    bestLookIndex = idx
+                } else {
+                    // Corner wall blocks line of sight: do not peek past the wall
+                    break
+                }
+            }
+        }
+
+        val lookWp = if (currentWaypoints.isNotEmpty() && bestLookIndex in currentWaypoints.indices) {
+            currentWaypoints[bestLookIndex]
+        } else {
+            targetWp
+        }
 
         val lookAheadTangent = Vec3d(
             lookWp.x - env.playerPos.x,
@@ -351,14 +392,23 @@ class DefaultMovementController(
         )
         rotationEngine.setPathTangent(lookAheadTangent)
 
-        // While navigating along path parts, focus camera on upcoming part target
-        // Only focus on interaction target when nearing completion
+        // While navigating along path parts, focus camera on upcoming part target if visible
         val partFocusPoint = if (currentWaypoints.isNotEmpty()) {
             Vec3d(lookWp.x, lookWp.y + 1.3, lookWp.z)
         } else {
             target.getFocusPoint(env)
         }
-        rotationEngine.setTarget(partFocusPoint)
+
+        val canSeeFocus = partFocusPoint != null &&
+            !isUnderDestination &&
+            hasLineOfSightRay(env, env.playerEyePos, partFocusPoint)
+
+        if (canSeeFocus) {
+            rotationEngine.setTarget(partFocusPoint)
+        } else {
+            // View obstructed by wall/cave: follow path tangent straight out!
+            rotationEngine.setTarget(null)
+        }
 
         val input = MovementInput(
             forward = moveFwd,
@@ -384,11 +434,57 @@ class DefaultMovementController(
         val dx = targetWp.x - env.playerPos.x
         val dz = targetWp.z - env.playerPos.z
         val horizDist = sqrt(dx * dx + dz * dz)
-        if (horizDist !in 1.25..3.5) return false
-        val midX = (env.playerPos.x + targetWp.x) * 0.5
-        val midZ = (env.playerPos.z + targetWp.z) * 0.5
-        val midPos = BlockPos.ofFloored(midX, env.playerPos.y, midZ)
-        return env.isAir(midPos) && env.isAir(midPos.down())
+        if (horizDist !in 1.25..3.8) return false
+        val dirX = dx / horizDist
+        val dirZ = dz / horizDist
+        val maxSteps = kotlin.math.floor(horizDist - 0.4).toInt()
+        for (step in 1..maxSteps) {
+            val checkX = env.playerPos.x + dirX * step
+            val checkZ = env.playerPos.z + dirZ * step
+            val checkPos = BlockPos.ofFloored(checkX, env.playerPos.y, checkZ)
+            if (env.isAir(checkPos) && env.isAir(checkPos.down())) {
+                return true
+            }
+        }
+        return false
+    }
+
+    fun hasLineOfSightRay(env: TargetEnvironment, from: Vec3d, to: Vec3d): Boolean {
+        val dx = to.x - from.x
+        val dy = to.y - from.y
+        val dz = to.z - from.z
+        val dist = sqrt(dx * dx + dy * dy + dz * dz)
+        if (dist < 0.1) return true
+
+        val steps = maxOf(1, kotlin.math.ceil(dist / 0.25).toInt())
+        val stepX = dx / steps
+        val stepY = dy / steps
+        val stepZ = dz / steps
+
+        val endBlock = BlockPos.ofFloored(to.x, to.y, to.z)
+        val startBlock = BlockPos.ofFloored(from.x, from.y, from.z)
+        var prevBlock: BlockPos? = null
+
+        val pathEnv = pathEnvironmentProvider?.invoke(env) ?: (env as? PathEnvironment)
+
+        for (i in 1 until steps) {
+            val cx = from.x + stepX * i
+            val cy = from.y + stepY * i
+            val cz = from.z + stepZ * i
+            val block = BlockPos.ofFloored(cx, cy, cz)
+            if (block == prevBlock || block == startBlock || block == endBlock) continue
+            prevBlock = block
+
+            if (pathEnv != null) {
+                if (pathEnv.isSolid(block)) return false
+            } else if (env is WorldTargetEnvironment) {
+                val state = env.world.getBlockState(block)
+                if (state.isSolidBlock(env.world, block)) return false
+            } else {
+                if (!env.isAir(block)) return false
+            }
+        }
+        return true
     }
 
     private fun findStandHeightNear(pathEnv: PathEnvironment?, x: Double, refY: Double, z: Double): Double? {
@@ -435,7 +531,9 @@ class DefaultMovementController(
             currentWaypoints = result.waypoints
             currentWaypointIndex = 0
         } else {
-            if (currentWaypoints.isEmpty() || currentWaypointIndex >= currentWaypoints.size) {
+            val distToGoalSq = (goalPos.x - env.playerPos.x) * (goalPos.x - env.playerPos.x) + (goalPos.z - env.playerPos.z) * (goalPos.z - env.playerPos.z)
+            val isTrappedUnder = distToGoalSq <= 2.25 && (goalPos.y - env.playerPos.y) > 1.25
+            if (!isTrappedUnder && (currentWaypoints.isEmpty() || currentWaypointIndex >= currentWaypoints.size)) {
                 currentWaypoints = listOf(planningGoal)
                 currentWaypointIndex = 0
             }

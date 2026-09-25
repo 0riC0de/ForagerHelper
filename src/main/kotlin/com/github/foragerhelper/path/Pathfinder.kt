@@ -353,7 +353,7 @@ class AStarPathfinder(
 
                     val landingBox = Box(landingPos.x + 0.2, landingGroundY + 0.02, landingPos.z + 0.2, landingPos.x + 0.8, landingGroundY + 1.8, landingPos.z + 0.8)
                     if (env.isPassable(landingBox)) {
-                        val pCost = if (gapDist == 2) 2.50 else 3.50
+                        val pCost = if (gapDist == 2) 2.50 else 3.20
                         val vec = Vec3d(landingPos.x + 0.5, landingGroundY, landingPos.z + 0.5)
                         val node = PathNode(landingPos, vec, 0.0, computeHeuristic(vec, goal, start), null, MoveAction.PARKOUR, dx, dz)
                         result.add(NeighborEdge(node, pCost + gapPenaltyCost, dx, dz))

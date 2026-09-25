@@ -284,8 +284,15 @@ data class PositionTarget(
         return env.playerPos.squaredDistanceTo(position) <= r * r
     }
 
-    override fun isCompleted(env: TargetEnvironment): Boolean =
-        sqrt(env.playerPos.squaredDistanceTo(position)) <= arrivalRadius
+    override fun isCompleted(env: TargetEnvironment): Boolean {
+        val dx = env.playerPos.x - position.x
+        val dz = env.playerPos.z - position.z
+        val dy = env.playerPos.y - position.y
+        val horizDistSq = dx * dx + dz * dz
+        val rSq = arrivalRadius * arrivalRadius
+        if (horizDistSq + dy * dy <= rSq) return true
+        return horizDistSq <= rSq && kotlin.math.abs(dy) <= maxOf(arrivalRadius, 1.25)
+    }
 
     override fun isValid(env: TargetEnvironment): Boolean = true
 

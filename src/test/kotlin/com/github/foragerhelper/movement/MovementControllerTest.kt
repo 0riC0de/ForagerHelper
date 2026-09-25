@@ -514,4 +514,135 @@ class MovementControllerTest {
             "Path tangent pitch must be clamped within [-20, 20]: actual=$tangentPitch"
         )
     }
+
+    // =========================================================================
+    // 6. Arrival Deadzone, Overhead Recovery, and Corridor Line-of-Sight Tests
+    // =========================================================================
+
+    @Test
+    fun testArrivalDeadzonePreventsRapidOscillation() {
+        // Player is within 0.15m of waypoint/goal
+        env.playerPosVec = Vec3d(5.0, 64.0, 5.0)
+        val target = PositionTarget(Vec3d(5.15, 64.0, 5.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(Vec3d(5.15, 64.0, 5.0)))
+
+        val input = controller.tick(env, playerYaw = 0.0f)
+        assertFalse(input.forward, "Deadzone must suppress forward movement")
+        assertFalse(input.back, "Deadzone must suppress backward movement")
+        assertFalse(input.left, "Deadzone must suppress strafing")
+        assertFalse(input.right, "Deadzone must suppress strafing")
+    }
+
+    @Test
+    fun testNoMoveBackWhenCloseToWaypoint() {
+        // Player is 0.4m past waypoint, facing away (forwardDot < -0.38)
+        env.playerPosVec = Vec3d(5.4, 64.0, 5.0)
+        val target = PositionTarget(Vec3d(5.0, 64.0, 5.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(Vec3d(5.0, 64.0, 5.0)))
+
+        // Facing East (+X), waypoint is behind (-X)
+        val input = controller.tick(env, playerYaw = -90.0f)
+        assertFalse(input.back, "Must not move backward when within 0.8m of waypoint to prevent flip-flopping oscillation")
+    }
+
+    @Test
+    fun testUnderLookingBlockCountsAsTraversedAndAdvances() {
+        // Intermediate waypoint is overhead at Y=66. Player is at Y=64 directly under it.
+        env.playerPosVec = Vec3d(2.0, 64.0, 0.0)
+        val target = PositionTarget(Vec3d(10.0, 64.0, 0.0))
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(
+            Vec3d(2.0, 66.0, 0.0), // Intermediate looking block directly overhead (dy = +2.0)
+            Vec3d(10.0, 64.0, 0.0) // Next waypoint
+        ))
+
+        controller.tick(env, playerYaw = -90.0f)
+        assertEquals(
+            1, controller.currentWaypointIndex,
+            "When player is directly under an intermediate looking block, it must count as traversed and advance"
+        )
+    }
+
+    @Test
+    fun testUnderDestinationBlockDoesNotJumpAndRepaths() {
+        // Player failed parkour and is trapped directly under destination block at Y=67 (dy = +3.0)
+        env.playerPosVec = Vec3d(5.0, 64.0, 0.0)
+        val target = PositionTarget(Vec3d(5.2, 67.0, 0.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(Vec3d(5.2, 67.0, 0.0)))
+
+        val input = controller.tick(env, playerYaw = -90.0f)
+        assertFalse(
+            input.jump,
+            "Must NOT jump in place when trapped directly below destination block"
+        )
+
+        // RotationEngine should not focus on overhead ceiling
+        val rotEngine = controller.rotationEngine as com.github.foragerhelper.rotation.DefaultRotationEngine
+        assertNull(
+            rotEngine.targetFocusPoint,
+            "Must NOT stare straight up at overhead ceiling/destination block"
+        )
+    }
+
+    @Test
+    fun testCorridorCornerLineOfSightDoesNotLookIntoWall() {
+        // 1x2 cave corridor along Z (X=0). At Z=4, corridor turns right to X=3.
+        // Wall block at (1, 65, 3) blocks direct view to candidate waypoint at (3, 64, 4)
+        env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
+        env.playerEyePosVec = Vec3d(0.0, 65.62, 0.0)
+
+        // Wall block at (1, 65, 2)
+        env.setSolid(BlockPos(1, 65, 2))
+
+        val target = PositionTarget(Vec3d(3.0, 64.0, 4.0))
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(
+            Vec3d(0.0, 64.0, 1.0),
+            Vec3d(0.0, 64.0, 2.0), // Exit of corridor
+            Vec3d(3.0, 64.0, 4.0)  // Around corner (obscured by wall at (1,65,2))
+        ))
+
+        controller.tick(env, playerYaw = 0.0f)
+
+        val rotEngine = controller.rotationEngine as com.github.foragerhelper.rotation.DefaultRotationEngine
+        // Focus point must not be the wall-blocked waypoint around corner
+        assertNotEquals(
+            Vec3d(3.0, 65.3, 4.0),
+            rotEngine.targetFocusPoint,
+            "When target waypoint is obscured by cave wall, controller must not stare into wall block"
+        )
+        // Camera tangent must point along corridor (+Z, X=0), not into wall (+X)
+        val tangent = rotEngine.pathTangentVector
+        assertNotNull(tangent)
+        assertEquals(0.0, tangent!!.x, 0.01, "Tangent X should point straight along corridor, not into wall")
+
+        // Also test when focus point itself is completely obscured (no visible waypoints)
+        controller.setWaypointsForTest(listOf(Vec3d(3.0, 64.0, 4.0)))
+        controller.tick(env, playerYaw = 0.0f)
+        assertNull(
+            rotEngine.targetFocusPoint,
+            "When destination is completely obscured behind a wall, must not focus on wall"
+        )
+    }
+
+    @Test
+    fun testParkour2BlockGapApproachAndJump() {
+        // 2-block gap: platform at x=0, gap at x=1 and x=2, landing at x=3.5
+        env.playerPosVec = Vec3d(0.2, 64.0, 0.0)
+        env.setAir(BlockPos(1, 64, 0))
+        env.setAir(BlockPos(1, 63, 0))
+        env.setAir(BlockPos(2, 64, 0))
+        env.setAir(BlockPos(2, 63, 0))
+
+        val target = PositionTarget(Vec3d(3.5, 64.0, 0.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(Vec3d(3.5, 64.0, 0.0)))
+
+        val input = controller.tick(env, playerYaw = -90.0f) // Facing East towards +X
+        assertTrue(input.sprint, "Must sprint across 2-block parkour gap")
+        assertTrue(input.jump, "Must jump when approaching 2-block parkour gap")
+    }
 }
