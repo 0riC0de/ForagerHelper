@@ -29,10 +29,27 @@ object DebugWorldOverlay {
 						val color = if (index == currentIndex) 0xFFFFA000.toInt() else 0xFF199FFF.toInt()
 						drawPointBox(wp, color)
 					}
+					for (i in 0 until waypoints.size - 1) {
+						val p1 = waypoints[i].add(0.0, 0.15, 0.0)
+						val p2 = waypoints[i + 1].add(0.0, 0.15, 0.0)
+						val lineColor = when {
+							i < currentIndex -> 0x66199FFF.toInt()
+							i == currentIndex -> 0xFFFFA000.toInt()
+							else -> 0xFFE53935.toInt()
+						}
+						GizmoDrawing.line(p1, p2, lineColor, 3.0f).ignoreOcclusion().withLifespan(2)
+					}
 				} else {
+					val currentIndex = WalkController.pathIndex
 					WalkController.path.forEachIndexed { index, pos ->
-						val color = if (index == WalkController.pathIndex) 0xFFFFA000.toInt() else 0xFF199FFF.toInt()
+						val color = if (index == currentIndex) 0xFFFFA000.toInt() else 0xFF199FFF.toInt()
 						drawBox(pos, color)
+					}
+					for (i in 0 until WalkController.path.size - 1) {
+						val p1 = Vec3d(WalkController.path[i].x + 0.5, WalkController.path[i].y + 0.15, WalkController.path[i].z + 0.5)
+						val p2 = Vec3d(WalkController.path[i + 1].x + 0.5, WalkController.path[i + 1].y + 0.15, WalkController.path[i + 1].z + 0.5)
+						val lineColor = if (i == currentIndex) 0xFFFFA000.toInt() else 0xFFE53935.toInt()
+						GizmoDrawing.line(p1, p2, lineColor, 2.5f).ignoreOcclusion().withLifespan(2)
 					}
 				}
 

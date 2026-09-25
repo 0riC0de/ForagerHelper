@@ -369,7 +369,7 @@ class DefaultRotationEngine(
 
                 val deltaYaw = MathHelper.wrapDegrees(focusYaw - tangentYaw)
                 val blendedYaw = MathHelper.wrapDegrees(tangentYaw + deltaYaw * w)
-                val blendedPitch = MathHelper.clamp(tangentPitch + (focusPitch - tangentPitch) * w, -89.9f, 89.9f)
+                val blendedPitch = MathHelper.clamp(tangentPitch + (focusPitch - tangentPitch) * w, -25.0f, 25.0f)
                 Pair(blendedYaw, blendedPitch)
             }
         }

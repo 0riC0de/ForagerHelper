@@ -5,6 +5,7 @@ import com.github.foragerhelper.path.PathEnvironment
 import com.github.foragerhelper.path.PathResult
 import com.github.foragerhelper.path.Pathfinder
 import com.github.foragerhelper.rotation.RotationEngine
+import com.github.foragerhelper.target.BlockTarget
 import com.github.foragerhelper.target.NavigationTarget
 import com.github.foragerhelper.target.PositionTarget
 import com.github.foragerhelper.target.TargetEnvironment
@@ -36,7 +37,8 @@ data class MovementInput(
     val left: Boolean = false,
     val right: Boolean = false,
     val jump: Boolean = false,
-    val sneak: Boolean = false
+    val sneak: Boolean = false,
+    val sprint: Boolean = false
 ) {
     val hasMotion: Boolean get() = forward || back || left || right
 }
@@ -201,8 +203,10 @@ class DefaultMovementController(
             return lastComputedInput
         }
 
-        // 3. Interaction Reach check
-        if (target !is PositionTarget && target.isInReach(env)) {
+        // 3. Interaction Reach check: do not prematurely freeze on high ground if still following path
+        val isNavigatingPath = currentWaypoints.isNotEmpty() && currentWaypointIndex < currentWaypoints.size - 1
+        val isHighGroundLedge = target is BlockTarget && (env.playerPos.y - target.blockPos.y.toDouble()) > 1.8
+        if (target !is PositionTarget && target.isInReach(env) && !isNavigatingPath && !isHighGroundLedge) {
             state = MovementState.IN_REACH
             rotationEngine.setTarget(target.getFocusPoint(env))
             rotationEngine.setPathTangent(null)
@@ -229,7 +233,7 @@ class DefaultMovementController(
             computePath(env, goalPos)
         }
 
-        // 5. Waypoint progression
+        // 5. Waypoint progression with fallsafe drop support
         while (currentWaypointIndex < currentWaypoints.size) {
             val wp = currentWaypoints[currentWaypointIndex]
             val dx = wp.x - env.playerPos.x
@@ -237,7 +241,10 @@ class DefaultMovementController(
             val dy = wp.y - env.playerPos.y
             val distSq = dx * dx + dz * dz
 
-            if (distSq <= waypointRadius * waypointRadius && Math.abs(dy) <= 1.25) {
+            val reachedFlat = distSq <= waypointRadius * waypointRadius && Math.abs(dy) <= 1.25
+            val reachedDrop = distSq <= (waypointRadius * 1.5) * (waypointRadius * 1.5) && dy in -3.5..-0.5 && isDropSafe(env, wp)
+
+            if (reachedFlat || reachedDrop) {
                 currentWaypointIndex++
             } else {
                 break
@@ -309,7 +316,14 @@ class DefaultMovementController(
         val moveBack = forwardDot < -0.38
         val moveRight = rightDot > 0.38
         val moveLeft = rightDot < -0.38
-        val jump = dy > 0.5
+
+        // Parkour and jump logic
+        val isGap = isParkourGap(env, targetWp)
+        val jump = dy > 0.5 || (isGap && forwardDot > 0.65 && dist in 0.8..3.2)
+        val sprint = (isGap && forwardDot > 0.5) || (moveFwd && forwardDot > 0.82 && dist > 3.0)
+
+        // Drop handling: when dropping down safely, ensure sneak is released completely
+        val isDropping = dy in -3.5..-0.5
 
         // 9. Camera orientation update
         val lookWp = currentWaypoints.getOrNull(minOf(currentWaypointIndex + 1, currentWaypoints.size - 1)) ?: targetWp
@@ -322,10 +336,30 @@ class DefaultMovementController(
             back = moveBack,
             left = moveLeft,
             right = moveRight,
-            jump = jump
+            jump = jump,
+            sneak = false,
+            sprint = sprint
         )
         lastComputedInput = input
         return input
+    }
+
+    private fun isDropSafe(env: TargetEnvironment, targetWp: Vec3d): Boolean {
+        if (targetWp.y < 0.0) return false
+        val pos = BlockPos.ofFloored(targetWp.x, targetWp.y, targetWp.z)
+        val below = pos.down()
+        return !env.isAir(below)
+    }
+
+    private fun isParkourGap(env: TargetEnvironment, targetWp: Vec3d): Boolean {
+        val dx = targetWp.x - env.playerPos.x
+        val dz = targetWp.z - env.playerPos.z
+        val horizDist = sqrt(dx * dx + dz * dz)
+        if (horizDist !in 1.25..3.5) return false
+        val midX = (env.playerPos.x + targetWp.x) * 0.5
+        val midZ = (env.playerPos.z + targetWp.z) * 0.5
+        val midPos = BlockPos.ofFloored(midX, env.playerPos.y, midZ)
+        return env.isAir(midPos) && env.isAir(midPos.down())
     }
 
     private fun computePath(env: TargetEnvironment, goalPos: Vec3d) {
@@ -335,10 +369,25 @@ class DefaultMovementController(
         val pathEnv = pathEnvironmentProvider?.invoke(env)
             ?: (env as? PathEnvironment)
 
+        val totalDist = env.playerPos.distanceTo(goalPos)
+        val planningGoal = if (totalDist > 36.0) {
+            // Segment the route into local human-like parts along the heading
+            val dirX = (goalPos.x - env.playerPos.x) / totalDist
+            val dirZ = (goalPos.z - env.playerPos.z) / totalDist
+            val segDist = minOf(32.0, totalDist)
+            val subX = env.playerPos.x + dirX * segDist
+            val subZ = env.playerPos.z + dirZ * segDist
+            val approxPos = BlockPos.ofFloored(subX, env.playerPos.y, subZ)
+            val standY = pathEnv?.getStandHeight(approxPos) ?: env.playerPos.y
+            Vec3d(subX, standY, subZ)
+        } else {
+            goalPos
+        }
+
         val result = when {
-            pathEnv != null -> pathfinder.findPath(pathEnv, env.playerPos, goalPos)
-            env is WorldTargetEnvironment -> pathfinder.findPath(env.world, env.playerPos, goalPos)
-            else -> PathResult(success = true, waypoints = listOf(env.playerPos, goalPos))
+            pathEnv != null -> pathfinder.findPath(pathEnv, env.playerPos, planningGoal)
+            env is WorldTargetEnvironment -> pathfinder.findPath(env.world, env.playerPos, planningGoal)
+            else -> PathResult(success = true, waypoints = listOf(env.playerPos, planningGoal))
         }
 
         if (result.success && result.waypoints.isNotEmpty()) {
@@ -346,7 +395,7 @@ class DefaultMovementController(
             currentWaypointIndex = 0
         } else {
             if (currentWaypoints.isEmpty()) {
-                currentWaypoints = listOf(goalPos)
+                currentWaypoints = listOf(planningGoal)
                 currentWaypointIndex = 0
             }
         }
@@ -359,6 +408,7 @@ class DefaultMovementController(
         client.options.rightKey.setPressed(input.right)
         client.options.jumpKey.setPressed(input.jump)
         client.options.sneakKey.setPressed(input.sneak)
+        client.options.sprintKey.setPressed(input.sprint)
     }
 
     private fun releaseKeys(client: MinecraftClient) {
@@ -368,5 +418,6 @@ class DefaultMovementController(
         client.options.rightKey.setPressed(false)
         client.options.jumpKey.setPressed(false)
         client.options.sneakKey.setPressed(false)
+        client.options.sprintKey.setPressed(false)
     }
 }

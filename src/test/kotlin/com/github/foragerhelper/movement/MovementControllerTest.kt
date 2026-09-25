@@ -330,4 +330,93 @@ class MovementControllerTest {
         assertTrue(repathCalled, "Tier 3 must invoke onRepathRequested")
         assertNotNull(penalizedPos, "Tier 3 must penalize current node in pathfinder")
     }
+
+    // =========================================================================
+    // 5. Walking Enhancements: High-Ground, Fallsafe, Parkour & Segmenting
+    // =========================================================================
+
+    @Test
+    fun testHighGroundDoesNotPrematurelyFreezeInReachWhileNavigating() {
+        // Player is elevated on a ledge at Y=68. Target block is below at Y=65.
+        // 3D distance is sqrt(2^2 + 3^2) = 3.6m <= 4.5m reach.
+        env.playerPosVec = Vec3d(0.0, 68.0, 0.0)
+        env.playerEyePosVec = Vec3d(0.0, 69.62, 0.0)
+        val pos = BlockPos(2, 65, 0)
+        env.setTargetBlock(pos)
+        val target = BlockTarget(pos)
+        controller.setDestination(target)
+
+        // Give controller active multi-node path down to the ground
+        controller.setWaypointsForTest(listOf(
+            Vec3d(0.0, 68.0, 0.0),
+            Vec3d(1.0, 66.0, 0.0),
+            Vec3d(2.0, 65.0, 0.0)
+        ))
+
+        val input = controller.tick(env, playerYaw = -90.0f)
+        assertNotEquals(
+            MovementState.IN_REACH, controller.state,
+            "Must NOT freeze into IN_REACH while elevated on high ground with a path active"
+        )
+        assertFalse(input.sneak, "Must NOT hold sneak on high ground ledge during active pathing")
+    }
+
+    @Test
+    fun testFallsafeDropProgressionAdvancesWaypoint() {
+        // Player standing at ledge edge (0, 68, 0). Next waypoint is a safe 2-block drop to (0, 66, 0).
+        env.playerPosVec = Vec3d(0.0, 68.0, 0.0)
+        env.playerEyePosVec = Vec3d(0.0, 69.62, 0.0)
+        val landingPos = BlockPos(0, 66, 0)
+        // Solid ground beneath landing
+        env.setTargetBlock(landingPos.down())
+
+        val target = PositionTarget(Vec3d(0.0, 66.0, 10.0))
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(
+            Vec3d(0.0, 66.0, 0.0), // Drop landing
+            Vec3d(0.0, 66.0, 10.0)
+        ))
+
+        controller.tick(env, playerYaw = 0.0f)
+        assertEquals(
+            1, controller.currentWaypointIndex,
+            "Fallsafe drop progression must advance past drop waypoint when horizontally aligned"
+        )
+    }
+
+    @Test
+    fun testParkourGapSprintAndJump() {
+        // Player is approaching a gap to waypoint at (2.5, 64, 0).
+        env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
+        val gapPos = BlockPos(1, 64, 0)
+        env.setAir(gapPos)
+        env.setAir(gapPos.down()) // Air gap beneath feet
+
+        val target = PositionTarget(Vec3d(2.5, 64.0, 0.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(Vec3d(2.5, 64.0, 0.0)))
+
+        val input = controller.tick(env, playerYaw = -90.0f) // Facing East towards +X
+        assertTrue(input.jump, "Must jump when approaching a parkour gap")
+        assertTrue(input.sprint, "Must sprint across parkour gap jumps")
+    }
+
+    @Test
+    fun testSegmentedRoutePlanningForLongDistance() {
+        // Far destination 100 blocks away
+        env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
+        val farGoal = Vec3d(100.0, 64.0, 0.0)
+        val target = PositionTarget(farGoal, arrivalRadius = 1.0)
+        controller.setDestination(target)
+
+        controller.tick(env, playerYaw = -90.0f)
+
+        assertTrue(controller.currentWaypoints.isNotEmpty(), "Waypoints must not be empty")
+        val firstWp = controller.currentWaypoints.first()
+        val distToFirst = env.playerPosVec.distanceTo(firstWp)
+        assertTrue(
+            distToFirst <= 36.0,
+            "Long distance routes must be divided into local segments (dist <= 36m): actual=$distToFirst"
+        )
+    }
 }

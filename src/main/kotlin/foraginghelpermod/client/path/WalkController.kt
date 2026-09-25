@@ -333,6 +333,8 @@ object WalkController {
 	}
 
 	private fun lookAtNaturally(player: ClientPlayerEntity, point: Vec3d, precise: Boolean = false) {
+		val tangent = point.subtract(player.eyePos)
+		com.github.foragerhelper.rotation.RotationEngine.setPathTangent(tangent)
 		com.github.foragerhelper.rotation.RotationEngine.setTarget(point)
 	}
 
