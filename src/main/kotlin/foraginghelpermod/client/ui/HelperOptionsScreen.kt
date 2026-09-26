@@ -159,10 +159,10 @@ class HelperOptionsScreen : Screen(Text.translatable("screen.oriforaginhelpermod
 				// Subtle motion blur trailing passes (rendered during peak sliding velocity)
 				val velocityFactor = sin(tabProgress * Math.PI.toFloat())
 				if (velocityFactor > 0.15f) {
-					val blur1Offset = -direction * 8f * velocityFactor
-					val blur2Offset = -direction * 4f * velocityFactor
-					val blurAlpha1 = 0.08f * alpha * velocityFactor
-					val blurAlpha2 = 0.15f * alpha * velocityFactor
+					val blur1Offset = direction * 6f * velocityFactor
+					val blur2Offset = direction * 12f * velocityFactor
+					val blurAlpha1 = 0.14f * alpha * velocityFactor
+					val blurAlpha2 = 0.07f * alpha * velocityFactor
 
 					drawContentPage(context, selectedTab, contentLeft + inOffset.roundToInt() + blur1Offset.roundToInt(), contentTop, contentW, contentH, blurAlpha1, mx, my)
 					drawContentPage(context, selectedTab, contentLeft + inOffset.roundToInt() + blur2Offset.roundToInt(), contentTop, contentW, contentH, blurAlpha2, mx, my)
@@ -292,7 +292,7 @@ class HelperOptionsScreen : Screen(Text.translatable("screen.oriforaginhelpermod
 		my: Int
 	) {
 		val tr = textRenderer
-		val cardH = 46
+		val cardH = 48
 		val cardW = w - 8
 
 		optionList.forEachIndexed { index, opt ->
@@ -306,16 +306,23 @@ class HelperOptionsScreen : Screen(Text.translatable("screen.oriforaginhelpermod
 			val cardBorder = if (isHover) Colors.BORDER_LIGHT else Colors.CARD_BORDER
 			drawBorder(context, cardX, cardY, cardW, cardH, Colors.withAlpha(cardBorder, alpha))
 
-			// Option label & description
+			// Left column: Option Title + Modern Pill Toggle Switch
 			context.drawText(tr, opt.label, cardX + 12, cardY + 8, Colors.withAlpha(Colors.TEXT, alpha), false)
-			context.drawText(tr, opt.description, cardX + 12, cardY + 22, Colors.withAlpha(Colors.TEXT_MUTED, alpha * 0.90f), false)
 
-			// Modern Pill Toggle Switch
 			val toggleW = 28
 			val toggleH = 14
-			val toggleX = cardX + cardW - 14 - toggleW
-			val toggleY = cardY + (cardH - toggleH) / 2
+			val toggleX = cardX + 12
+			val toggleY = cardY + 24
 			drawPillToggle(context, toggleX, toggleY, toggleW, toggleH, opt.getter(), alpha, isHover)
+
+			// Right column: Detailed descriptive text matching Taunahi+
+			val descX = cardX + 125
+			val descY = cardY + 8
+			val descW = cardW - 135
+			val wrapped = tr.wrapLines(Text.literal(opt.description), descW)
+			wrapped.take(3).forEachIndexed { lineIdx, line ->
+				context.drawText(tr, line, descX, descY + lineIdx * 11, Colors.withAlpha(Colors.TEXT_MUTED, alpha * 0.90f), false)
+			}
 		}
 	}
 
@@ -490,6 +497,7 @@ class HelperOptionsScreen : Screen(Text.translatable("screen.oriforaginhelpermod
 	}
 
 	override fun mouseClicked(click: Click, doubled: Boolean): Boolean {
+		if (click.button() != 0) return super.mouseClicked(click, doubled)
 		if (closing || animationProgress() < 0.85f) return true
 
 		val progress = animationProgress()
@@ -541,7 +549,7 @@ class HelperOptionsScreen : Screen(Text.translatable("screen.oriforaginhelpermod
 		}
 
 		if (currentOptions != null) {
-			val cardH = 46
+			val cardH = 48
 			val cardW = contentW - 8
 			currentOptions.forEachIndexed { index, opt ->
 				val cardX = contentLeft + 4
@@ -658,8 +666,8 @@ class HelperOptionsScreen : Screen(Text.translatable("screen.oriforaginhelpermod
 		if (isNameInputFocused && input.isValidChar) {
 			val str = input.asString()
 			for (chr in str) {
-				if (chr.isLetterOrDigit() || chr.isWhitespace() || chr in "_-()[]#") {
-					if (nameInputText.length < 24) {
+				if (!chr.isISOControl() && chr != '|') {
+					if (nameInputText.length < 32) {
 						nameInputText += chr
 					}
 				}

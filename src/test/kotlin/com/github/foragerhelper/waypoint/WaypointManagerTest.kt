@@ -110,4 +110,25 @@ class WaypointManagerTest {
         WaypointManager.load()
         assertEquals("Renamed Tree", WaypointManager.getWaypoint(custom.id)?.name)
     }
+
+    @Test
+    fun testWaypointPipeSanitization() {
+        val wp = WaypointManager.addWaypoint("Tree|Cave|Secret", Vec3d(5.0, 64.0, 5.0))
+        assertFalse(wp.name.contains("|"), "Pipes must be sanitized from waypoint names")
+        assertEquals("Tree-Cave-Secret", wp.name)
+        WaypointManager.save()
+        WaypointManager.load()
+        assertEquals("Tree-Cave-Secret", WaypointManager.getWaypoint(wp.id)?.name)
+    }
+
+    @Test
+    fun testWaypointNewlineSanitization() {
+        val wp = WaypointManager.addWaypoint("Multi\r\nLine\nName", Vec3d(10.0, 64.0, 10.0))
+        assertFalse(wp.name.contains("\n"), "Newlines must be sanitized")
+        assertFalse(wp.name.contains("\r"), "Carriage returns must be sanitized")
+        assertEquals("Multi Line Name", wp.name)
+        WaypointManager.save()
+        WaypointManager.load()
+        assertEquals("Multi Line Name", WaypointManager.getWaypoint(wp.id)?.name)
+    }
 }

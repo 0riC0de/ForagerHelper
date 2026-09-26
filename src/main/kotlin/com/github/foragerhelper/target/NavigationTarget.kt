@@ -45,6 +45,9 @@ interface TargetEnvironment {
     /** Returns true if block at pos or supporting floor is stairs or slab. */
     fun isStepUpBlock(pos: BlockPos): Boolean = false
 
+    /** Returns true if player has solid ground support. */
+    val isOnGround: Boolean get() = !isAir(BlockPos.ofFloored(playerPos.x, playerPos.y, playerPos.z).down())
+
     /**
      * Returns all [LivingEntity] instances whose bounding boxes overlap [box].
      * Tests may return empty.
@@ -70,6 +73,8 @@ class WorldTargetEnvironment(
         if (player.abilities.creativeMode) 6.0 else 4.5
 
     override val movementSpeed: Double get() = player.movementSpeed.toDouble()
+
+    override val isOnGround: Boolean get() = player.isOnGround || !isAir(BlockPos.ofFloored(playerPos.x, playerPos.y, playerPos.z).down())
 
     override fun isStepUpBlock(pos: BlockPos): Boolean {
         val state = world.getBlockState(pos)

@@ -43,7 +43,25 @@ object InputController {
 	private var committedPositions: Set<BlockPos> = emptySet()
 
 	fun register() {
+		ClientTickEvents.START_CLIENT_TICK.register(::onStartTick)
 		ClientTickEvents.END_CLIENT_TICK.register(::onEndTick)
+	}
+
+	fun forceReleaseMovementKeys(client: MinecraftClient) {
+		val opts = client.options
+		if (opts.forwardKey.isPressed) opts.forwardKey.setPressed(false)
+		if (opts.backKey.isPressed) opts.backKey.setPressed(false)
+		if (opts.leftKey.isPressed) opts.leftKey.setPressed(false)
+		if (opts.rightKey.isPressed) opts.rightKey.setPressed(false)
+		if (opts.jumpKey.isPressed) opts.jumpKey.setPressed(false)
+		if (opts.sneakKey.isPressed) opts.sneakKey.setPressed(false)
+		if (opts.sprintKey.isPressed) opts.sprintKey.setPressed(false)
+	}
+
+	private fun onStartTick(client: MinecraftClient) {
+		if (client.currentScreen != null) {
+			forceReleaseMovementKeys(client)
+		}
 	}
 
 	fun openOptions() {
@@ -72,6 +90,7 @@ object InputController {
 
 		if (client.currentScreen != null) {
 			// Never keep synthetic movement active or process movement while any GUI is open (inventory, chat, screens).
+			forceReleaseMovementKeys(client)
 			com.github.foragerhelper.movement.MovementController.stop()
 			WalkController.stop(client)
 			return
@@ -155,13 +174,16 @@ object InputController {
 	}
 
 	private fun clearScan(client: MinecraftClient) {
+		val wasActive = nearestTree != null || targetLog != null || committedPositions.isNotEmpty() || com.github.foragerhelper.movement.MovementController.isNavigating
 		nearestTree = null
 		targetLog = null
 		treeCount = 0
 		tickCounter = 0
 		committedPositions = emptySet()
-		com.github.foragerhelper.movement.MovementController.stop()
-		WalkController.stop(client)
+		if (wasActive) {
+			com.github.foragerhelper.movement.MovementController.stop()
+			WalkController.stop(client)
+		}
 	}
 
 	fun forgetTarget(pos: BlockPos) {

@@ -67,6 +67,12 @@ class WorldPathEnvironment(val world: World) : PathEnvironment {
             if (maxAtY in 0.4..0.6) {
                 return pos.y + maxAtY
             }
+            if (stateAt.block is net.minecraft.block.StairsBlock) {
+                val minY = shapeAt.boundingBoxes.minOfOrNull { it.minY } ?: 0.0
+                if (minY < 0.1) {
+                    return pos.y + 0.5
+                }
+            }
             // Height > 0.6 means the block inside pos blocks standing
             return null
         }
@@ -86,10 +92,19 @@ class WorldPathEnvironment(val world: World) : PathEnvironment {
 
     override fun isBottomSlab(pos: BlockPos): Boolean {
         val state = world.getBlockState(pos)
-        val shape = state.getCollisionShape(world, pos)
-        if (shape.isEmpty) return false
-        val maxBoxY = shape.boundingBoxes.maxOfOrNull { it.maxY } ?: 0.0
-        return maxBoxY in 0.4..0.6
+        if (state.block is net.minecraft.block.SlabBlock) {
+            val shape = state.getCollisionShape(world, pos)
+            if (shape.isEmpty) return false
+            val maxBoxY = shape.boundingBoxes.maxOfOrNull { it.maxY } ?: 0.0
+            return maxBoxY in 0.4..0.6
+        }
+        if (state.block is net.minecraft.block.StairsBlock) {
+            val shape = state.getCollisionShape(world, pos)
+            if (shape.isEmpty) return false
+            val minY = shape.boundingBoxes.minOfOrNull { it.minY } ?: 0.0
+            return minY < 0.1
+        }
+        return false
     }
 
     override fun getBlockCollisions(box: Box): List<Box> {
@@ -224,7 +239,7 @@ class TestWorldGrid : PathEnvironment {
     }
 
     override fun isBottomSlab(pos: BlockPos): Boolean {
-        return bottomSlabs.contains(pos)
+        return bottomSlabs.contains(pos) || stairs.containsKey(pos)
     }
 
     override fun isHazard(pos: BlockPos): Boolean {

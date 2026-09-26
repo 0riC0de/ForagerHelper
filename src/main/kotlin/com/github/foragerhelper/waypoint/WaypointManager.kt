@@ -30,7 +30,7 @@ object WaypointManager {
         get() = waypointsList.toList()
 
     fun addWaypoint(name: String, pos: Vec3d): Waypoint {
-        val cleanName = name.ifBlank { "Waypoint ${waypointsList.size + 1}" }
+        val cleanName = name.replace("\r", "").replace("\n", " ").replace("|", "-").trim().ifBlank { "Waypoint ${waypointsList.size + 1}" }
         val wp = Waypoint(
             name = cleanName,
             x = Math.round(pos.x * 100.0) / 100.0,

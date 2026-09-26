@@ -8,6 +8,7 @@ import com.github.foragerhelper.target.BlockTarget
 import com.github.foragerhelper.target.FakeTargetEnvironment
 import com.github.foragerhelper.target.PositionTarget
 import net.minecraft.util.math.BlockPos
+import net.minecraft.util.math.Direction
 import net.minecraft.util.math.Vec3d
 import net.minecraft.world.World
 import org.junit.jupiter.api.Assertions.*
@@ -1155,5 +1156,93 @@ class MovementControllerTest {
             customController.tick(env, playerYaw = 0.0f)
         }
         assertEquals(1, pathComputedCount, "Pathfinder must NOT be re-invoked every tick when waypoints are empty (rate-limited)")
+    }
+
+    @Test
+    fun testStandingOnSlabNextToFullBlockNotBlockedAsSideWall() {
+        val grid = TestWorldGrid()
+        grid.addFlatPlatform(-3, 3, -3, 3, 63)
+        // Bottom slab at (0, 64, 0)
+        grid.setSlab(0, 64, 0, top = false)
+        // Full block beside it at (1, 64, 0)
+        grid.setSolid(1, 64, 0)
+
+        // Player standing on the slab at y = 64.5
+        env.playerPosVec = Vec3d(0.5, 64.5, 0.5)
+        controller.pathEnvironmentProvider = { grid }
+
+        val blocked = controller.isSideBlocked(env, 1.0, 0.0)
+        assertFalse(
+            blocked,
+            "Full block beside player on slab (0.5m step-up) must NOT be detected as side wall obstacle"
+        )
+    }
+
+    @Test
+    fun testStandingNextToStairsNotBlockedAsSideWall() {
+        val grid = TestWorldGrid()
+        grid.addFlatPlatform(-3, 3, -3, 3, 63)
+        // Bottom stairs at (1, 64, 0)
+        grid.setStairs(1, 64, 0, Direction.EAST)
+
+        env.playerPosVec = Vec3d(0.5, 64.0, 0.5)
+        controller.pathEnvironmentProvider = { grid }
+
+        val blocked = controller.isSideBlocked(env, 1.0, 0.0)
+        assertFalse(
+            blocked,
+            "Stairs beside the player must NOT be detected as a solid wall side obstacle"
+        )
+    }
+
+    @Test
+    fun testConsecutive2BlockParkourGapLandingAtBackEdgeJumps() {
+        env.playerPosVec = Vec3d(3.05, 64.0, 0.0)
+        env.setAir(BlockPos(1, 64, 0))
+        env.setAir(BlockPos(1, 63, 0))
+        env.setAir(BlockPos(2, 64, 0))
+        env.setAir(BlockPos(2, 63, 0))
+        env.setAir(BlockPos(4, 64, 0))
+        env.setAir(BlockPos(4, 63, 0))
+        env.setAir(BlockPos(5, 64, 0))
+        env.setAir(BlockPos(5, 63, 0))
+
+        val wp2 = Vec3d(6.5, 64.0, 0.0)
+        val target = PositionTarget(wp2, arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(wp2), index = 0)
+
+        val input = controller.tick(env, playerYaw = -90.0f)
+        assertTrue(input.sprint, "Must maintain sprint on consecutive parkour gap when landing near back edge")
+        assertTrue(input.jump, "Must jump across second consecutive parkour gap even when landing near back edge")
+    }
+
+    @Test
+    fun testNoRepathingWhileApproachingParkourGap() {
+        var pathComputedCount = 0
+        val mockPathfinder = object : Pathfinder by controller.pathfinder {
+            override fun findPath(env: PathEnvironment, start: Vec3d, goal: Vec3d, allowedRange: Double): PathResult {
+                pathComputedCount++
+                return PathResult(success = true, waypoints = listOf(Vec3d(0.5, 64.0, 0.0), Vec3d(3.5, 64.0, 0.0)))
+            }
+        }
+        val customController = DefaultMovementController(pathfinder = mockPathfinder, repathIntervalTicks = 10)
+        customController.pathEnvironmentProvider = { TestWorldGrid() }
+
+        // Setup parkour gap ahead
+        env.playerPosVec = Vec3d(0.5, 64.0, 0.0)
+        env.setAir(BlockPos(1, 64, 0))
+        env.setAir(BlockPos(1, 63, 0))
+        env.setAir(BlockPos(2, 64, 0))
+        env.setAir(BlockPos(2, 63, 0))
+
+        val target = PositionTarget(Vec3d(3.5, 64.0, 0.0))
+        customController.setDestination(target)
+        customController.setWaypointsForTest(listOf(Vec3d(3.5, 64.0, 0.0)), index = 0)
+
+        for (t in 1..25) {
+            customController.tick(env, playerYaw = -90.0f)
+        }
+        assertEquals(0, pathComputedCount, "Must not repath while actively approaching or executing a parkour gap jump")
     }
 }

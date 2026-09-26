@@ -281,10 +281,12 @@ class DefaultMovementController(
         val goalMoved = lastGoalPos != null && goalPos.squaredDistanceTo(lastGoalPos!!) > 4.0
         val isClimbing = currentWaypoints.isNotEmpty() && currentWaypointIndex < currentWaypoints.size && dyToGoal > 1.0
         val isPathExhausted = currentWaypoints.isNotEmpty() && currentWaypointIndex >= currentWaypoints.size
+        val hasActiveParkourAhead = currentWaypoints.isNotEmpty() && currentWaypointIndex < currentWaypoints.size &&
+            isParkourGap(env, currentWaypoints[currentWaypointIndex])
         val needsPath = (currentWaypoints.isEmpty() && ticksSincePath >= repathIntervalTicks) ||
-                        (isPathExhausted && ticksSincePath >= 4) ||
+                        (isPathExhausted && ticksSincePath >= 10) ||
                         goalMoved ||
-                        (ticksSincePath >= repathIntervalTicks && !isClimbing)
+                        (ticksSincePath >= repathIntervalTicks * 3 && !isClimbing && !hasActiveParkourAhead && env.isOnGround)
 
         if (needsPath) {
             computePath(env, goalPos)
@@ -431,15 +433,17 @@ class DefaultMovementController(
         val isNearEdge = if (isGap && dist > 0.01) {
             val dirX = dx / dist
             val dirZ = dz / dist
-            val p1 = BlockPos.ofFloored(env.playerPos.x + dirX * 0.5, env.playerPos.y, env.playerPos.z + dirZ * 0.5)
-            val p2 = BlockPos.ofFloored(env.playerPos.x + dirX * 1.0, env.playerPos.y, env.playerPos.z + dirZ * 1.0)
-            (env.isAir(p1) && env.isAir(p1.down())) || (env.isAir(p2) && env.isAir(p2.down()))
+            val probeOffsets = doubleArrayOf(0.3, 0.6, 0.9, 1.2, 1.5)
+            probeOffsets.any { offset ->
+                val p = BlockPos.ofFloored(env.playerPos.x + dirX * offset, env.playerPos.y, env.playerPos.z + dirZ * offset)
+                env.isAir(p) && env.isAir(p.down())
+            }
         } else false
 
         // Stairs & Slabs: elevations <= 0.60m step up automatically without jumping.
         // Elevations > 0.60m (full blocks or high step-ups) require jumping.
         val canStepUp = dy in 0.61..1.25 && !isSafeDrop
-        val parkourJump = isGap && forwardDot > 0.60 && (isNearEdge || dist <= 2.2)
+        val parkourJump = isGap && forwardDot > 0.45 && (isNearEdge || dist <= 3.4)
 
         // Sprint-jump only on long straight flat stretches, never on stairs, and never if high speed
         val RUNNING_FASTER_THAN_JUMPING_SPEED = 0.20
@@ -564,10 +568,10 @@ class DefaultMovementController(
         val dx = targetWp.x - env.playerPos.x
         val dz = targetWp.z - env.playerPos.z
         val horizDist = sqrt(dx * dx + dz * dz)
-        if (horizDist !in 1.25..4.2) return false
+        if (horizDist !in 1.25..4.5) return false
         val dirX = dx / horizDist
         val dirZ = dz / horizDist
-        val maxSteps = kotlin.math.floor(horizDist - 0.4).toInt()
+        val maxSteps = kotlin.math.floor(horizDist - 0.3).toInt()
         for (step in 1..maxSteps) {
             val checkX = env.playerPos.x + dirX * step
             val checkZ = env.playerPos.z + dirZ * step
@@ -643,7 +647,8 @@ class DefaultMovementController(
 
             // 2. Foot obstacle check:
             // Slabs and stairs (step-up blocks) are walkable terrain, never solid side walls!
-            if (env.isStepUpBlock(footPos) || pathEnv?.isBottomSlab(footPos) == true) {
+            if (env.isStepUpBlock(footPos) || env.isStepUpBlock(footPos.down()) ||
+                pathEnv?.isBottomSlab(footPos) == true || pathEnv?.isBottomSlab(footPos.down()) == true) {
                 continue
             }
 
@@ -654,10 +659,14 @@ class DefaultMovementController(
             }
 
             if (footSolid) {
-                // If the player can step up onto or walk on this surface (elevation difference <= 0.65m),
+                // If the player can step up onto or walk on this surface (elevation difference in -0.65..0.65m),
                 // it is walkable ground, NOT a blocking side wall!
-                val standH = pathEnv?.getStandHeight(footPos) ?: pathEnv?.getStandHeight(footPos.down())
-                if (standH != null && (standH - env.playerPos.y) <= 0.65) {
+                val standH = pathEnv?.getStandHeight(footPos)
+                    ?: pathEnv?.getStandHeight(footPos.up())
+                    ?: pathEnv?.getStandHeight(footPos.down())
+                    ?: (if (!headBlocked) footPos.y + 1.0 else null)
+
+                if (standH != null && (standH - env.playerPos.y) in -0.65..0.65) {
                     continue
                 }
                 return true
@@ -782,7 +791,7 @@ class DefaultMovementController(
         pathEnv: PathEnvironment,
         start: Vec3d,
         goal: Vec3d,
-        maxNodes: Int = 800
+        maxNodes: Int = 400
     ): PathResult? {
         val cachedEnv = if (pathEnv is CachedPathEnvironment) pathEnv else CachedPathEnvironment(pathEnv)
         val startPos = BlockPos.ofFloored(start.x, start.y, start.z)
@@ -810,7 +819,7 @@ class DefaultMovementController(
             BlockPos(-1, 0, 0)
         )
 
-        val deadline = System.currentTimeMillis() + 25L
+        val deadline = System.currentTimeMillis() + 15L
         var expansions = 0
         while (queue.isNotEmpty() && expansions < maxNodes) {
             if ((expansions and 31) == 0 && System.currentTimeMillis() > deadline) {
@@ -928,7 +937,7 @@ class DefaultMovementController(
 
         // 2. Island terrain bridge search: search for contiguous walkable ground / bridge route
         // before giving up or falling back to segmented routing!
-        if (pathEnv != null) {
+        if (pathEnv != null && totalDist <= 32.0) {
             val bridgeResult = findBridgeRoute(pathEnv, env.playerPos, goalPos)
             if (bridgeResult != null && bridgeResult.success && bridgeResult.waypoints.isNotEmpty()) {
                 currentWaypoints = bridgeResult.waypoints
