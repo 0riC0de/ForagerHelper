@@ -93,4 +93,21 @@ class WaypointManagerTest {
         WaypointManager.load()
         assertTrue(WaypointManager.waypoints.isEmpty())
     }
+
+    @Test
+    fun testCustomWaypointNamingAndDefaulting() {
+        val custom = WaypointManager.addWaypoint("My Secret Tree", Vec3d(10.0, 70.0, -10.0))
+        assertEquals("My Secret Tree", custom.name)
+
+        val emptyNamed = WaypointManager.addWaypoint("", Vec3d(0.0, 64.0, 0.0))
+        assertEquals("Waypoint 2", emptyNamed.name)
+
+        val whitespaceNamed = WaypointManager.addWaypoint("   ", Vec3d(1.0, 64.0, 1.0))
+        assertEquals("Waypoint 3", whitespaceNamed.name)
+
+        custom.name = "Renamed Tree"
+        WaypointManager.save()
+        WaypointManager.load()
+        assertEquals("Renamed Tree", WaypointManager.getWaypoint(custom.id)?.name)
+    }
 }

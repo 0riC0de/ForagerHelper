@@ -264,6 +264,10 @@ object WalkController {
 	 * if the user is holding them on their physical keyboard when the bot stops.
 	 */
 	private fun restorePhysicalKeyState(client: MinecraftClient, keyBinding: KeyBinding) {
+		if (client.currentScreen != null) {
+			keyBinding.setPressed(false)
+			return
+		}
 		try {
 			val key = InputUtil.fromTranslationKey(keyBinding.boundKeyTranslationKey)
 			val window = client.window.handle

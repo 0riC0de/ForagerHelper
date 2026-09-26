@@ -1,6 +1,7 @@
 package com.github.foragerhelper.movement
 
 import com.github.foragerhelper.path.AStarPathfinder
+import com.github.foragerhelper.path.CachedPathEnvironment
 import com.github.foragerhelper.path.PathEnvironment
 import com.github.foragerhelper.path.PathResult
 import com.github.foragerhelper.path.Pathfinder
@@ -13,8 +14,11 @@ import com.github.foragerhelper.target.PositionTarget
 import com.github.foragerhelper.target.TargetEnvironment
 import com.github.foragerhelper.target.WorldTargetEnvironment
 import net.minecraft.client.MinecraftClient
+import net.minecraft.client.option.KeyBinding
+import net.minecraft.client.util.InputUtil
 import net.minecraft.util.math.BlockPos
 import net.minecraft.util.math.Vec3d
+import org.lwjgl.glfw.GLFW
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
@@ -276,8 +280,9 @@ class DefaultMovementController(
         // 4. Path computation / periodic re-routing
         val goalMoved = lastGoalPos != null && goalPos.squaredDistanceTo(lastGoalPos!!) > 4.0
         val isClimbing = currentWaypoints.isNotEmpty() && currentWaypointIndex < currentWaypoints.size && dyToGoal > 1.0
-        val needsPath = currentWaypoints.isEmpty() ||
-                        currentWaypointIndex >= currentWaypoints.size ||
+        val isPathExhausted = currentWaypoints.isNotEmpty() && currentWaypointIndex >= currentWaypoints.size
+        val needsPath = (currentWaypoints.isEmpty() && ticksSincePath >= repathIntervalTicks) ||
+                        (isPathExhausted && ticksSincePath >= 4) ||
                         goalMoved ||
                         (ticksSincePath >= repathIntervalTicks && !isClimbing)
 
@@ -337,7 +342,7 @@ class DefaultMovementController(
         val arrivalLimit = maxOf(waypointRadius, (target as? PositionTarget)?.arrivalRadius ?: 0.65, 0.75)
         val isNearGoal = (distToGoal <= arrivalLimit || onGoalBlock) && Math.abs(dyToGoal) <= 1.5
 
-        if (currentWaypointIndex >= currentWaypoints.size || (currentWaypoints.isNotEmpty() && currentWaypointIndex == currentWaypoints.lastIndex && onGoalBlock)) {
+        if (currentWaypoints.isNotEmpty() && (currentWaypointIndex >= currentWaypoints.size || (currentWaypointIndex == currentWaypoints.lastIndex && onGoalBlock))) {
             if (target.isCompleted(env) || (target is PositionTarget && isNearGoal)) {
                 state = MovementState.COMPLETED
                 rotationEngine.setTarget(target.getFocusPoint(env))
@@ -426,20 +431,15 @@ class DefaultMovementController(
         val isNearEdge = if (isGap && dist > 0.01) {
             val dirX = dx / dist
             val dirZ = dz / dist
-            val probePos = BlockPos.ofFloored(env.playerPos.x + dirX * 0.65, env.playerPos.y, env.playerPos.z + dirZ * 0.65)
-            env.isAir(probePos) && env.isAir(probePos.down())
+            val p1 = BlockPos.ofFloored(env.playerPos.x + dirX * 0.5, env.playerPos.y, env.playerPos.z + dirZ * 0.5)
+            val p2 = BlockPos.ofFloored(env.playerPos.x + dirX * 1.0, env.playerPos.y, env.playerPos.z + dirZ * 1.0)
+            (env.isAir(p1) && env.isAir(p1.down())) || (env.isAir(p2) && env.isAir(p2.down()))
         } else false
 
-        // Stairs & Slabs: Minecraft automatically steps up <= 0.60m elevations (slabs, stairs).
-        // Suppress jump when stepping onto stairs, slabs, or step-ups to avoid slow awkward bouncing.
-        val targetBlockPos = BlockPos.ofFloored(targetWp.x, targetWp.y, targetWp.z)
-        val playerBlockPos = BlockPos.ofFloored(env.playerPos.x, env.playerPos.y, env.playerPos.z)
-        val isStairOrSlab = env.isStepUpBlock(targetBlockPos) ||
-                            env.isStepUpBlock(targetBlockPos.down()) ||
-                            env.isStepUpBlock(playerBlockPos)
-
-        val canStepUp = dy in 0.61..1.25 && !isSafeDrop && !isStairOrSlab
-        val parkourJump = !isStairOrSlab && isGap && forwardDot > 0.65 && (isNearEdge || dist in 0.8..3.5)
+        // Stairs & Slabs: elevations <= 0.60m step up automatically without jumping.
+        // Elevations > 0.60m (full blocks or high step-ups) require jumping.
+        val canStepUp = dy in 0.61..1.25 && !isSafeDrop
+        val parkourJump = isGap && forwardDot > 0.60 && (isNearEdge || dist <= 2.2)
 
         // Sprint-jump only on long straight flat stretches, never on stairs, and never if high speed
         val RUNNING_FASTER_THAN_JUMPING_SPEED = 0.20
@@ -633,13 +633,35 @@ class DefaultMovementController(
             val footPos = BlockPos.ofFloored(px, env.playerPos.y + 0.2, pz)
             val headPos = BlockPos.ofFloored(px, env.playerPos.y + 1.2, pz)
 
-            val blocked = if (pathEnv != null) {
-                pathEnv.isSolid(footPos) || pathEnv.isSolid(headPos)
+            // 1. Head/torso obstacle check: a solid block at head level is an impassable wall
+            val headBlocked = if (pathEnv != null) {
+                pathEnv.isSolid(headPos)
             } else {
-                (!env.isAir(footPos) && !env.isTargetBlock(footPos)) ||
-                (!env.isAir(headPos) && !env.isTargetBlock(headPos))
+                !env.isAir(headPos) && !env.isTargetBlock(headPos)
             }
-            if (blocked) return true
+            if (headBlocked) return true
+
+            // 2. Foot obstacle check:
+            // Slabs and stairs (step-up blocks) are walkable terrain, never solid side walls!
+            if (env.isStepUpBlock(footPos) || pathEnv?.isBottomSlab(footPos) == true) {
+                continue
+            }
+
+            val footSolid = if (pathEnv != null) {
+                pathEnv.isSolid(footPos)
+            } else {
+                !env.isAir(footPos) && !env.isTargetBlock(footPos)
+            }
+
+            if (footSolid) {
+                // If the player can step up onto or walk on this surface (elevation difference <= 0.65m),
+                // it is walkable ground, NOT a blocking side wall!
+                val standH = pathEnv?.getStandHeight(footPos) ?: pathEnv?.getStandHeight(footPos.down())
+                if (standH != null && (standH - env.playerPos.y) <= 0.65) {
+                    continue
+                }
+                return true
+            }
         }
         return false
     }
@@ -760,10 +782,11 @@ class DefaultMovementController(
         pathEnv: PathEnvironment,
         start: Vec3d,
         goal: Vec3d,
-        maxNodes: Int = 6000
+        maxNodes: Int = 800
     ): PathResult? {
+        val cachedEnv = if (pathEnv is CachedPathEnvironment) pathEnv else CachedPathEnvironment(pathEnv)
         val startPos = BlockPos.ofFloored(start.x, start.y, start.z)
-        val startGroundY = pathEnv.getStandHeight(startPos) ?: start.y
+        val startGroundY = cachedEnv.getStandHeight(startPos) ?: start.y
         val startVec = Vec3d(startPos.x + 0.5, startGroundY, startPos.z + 0.5)
 
         val queue = ArrayDeque<BlockPos>()
@@ -787,8 +810,12 @@ class DefaultMovementController(
             BlockPos(-1, 0, 0)
         )
 
+        val deadline = System.currentTimeMillis() + 25L
         var expansions = 0
         while (queue.isNotEmpty() && expansions < maxNodes) {
+            if ((expansions and 31) == 0 && System.currentTimeMillis() > deadline) {
+                break
+            }
             val currentPos = queue.removeFirst()
             expansions++
 
@@ -815,16 +842,16 @@ class DefaultMovementController(
                 var validGroundY: Double? = null
                 var finalPos = nextPos
 
-                val hFlat = pathEnv.getStandHeight(nextPos)
+                val hFlat = cachedEnv.getStandHeight(nextPos)
                 if (hFlat != null && abs(hFlat - curY) <= 0.65) {
                     validGroundY = hFlat
                 } else {
-                    val hUp = pathEnv.getStandHeight(nextPos.up())
+                    val hUp = cachedEnv.getStandHeight(nextPos.up())
                     if (hUp != null && (hUp - curY) in 0.35..1.25) {
                         validGroundY = hUp
                         finalPos = nextPos.up()
                     } else {
-                        val hDown = pathEnv.getStandHeight(nextPos.down())
+                        val hDown = cachedEnv.getStandHeight(nextPos.down())
                         if (hDown != null && (curY - hDown) in 0.35..1.25) {
                             validGroundY = hDown
                             finalPos = nextPos.down()
@@ -858,7 +885,7 @@ class DefaultMovementController(
 
         if (rawWaypoints.isEmpty()) return null
 
-        val smoothed = SweptBoxLOS.smoothPath(pathEnv, rawWaypoints, isAnchorNode = null)
+        val smoothed = SweptBoxLOS.smoothPath(cachedEnv, rawWaypoints, isAnchorNode = null)
         return PathResult(success = true, waypoints = smoothed)
     }
 
@@ -912,10 +939,12 @@ class DefaultMovementController(
 
         // 3. Segmented pathfinding for very long distance routes (> 36m)
         if (totalDist > 36.0) {
+            val segDeadline = System.currentTimeMillis() + 40L
             val dirX = (goalPos.x - env.playerPos.x) / totalDist
             val dirZ = (goalPos.z - env.playerPos.z) / totalDist
             val angles = doubleArrayOf(0.0, 15.0, -15.0, 30.0, -30.0, 45.0, -45.0, 60.0, -60.0)
             for (angleDeg in angles) {
+                if (System.currentTimeMillis() > segDeadline) break
                 val rad = Math.toRadians(angleDeg)
                 val cosA = kotlin.math.cos(rad)
                 val sinA = kotlin.math.sin(rad)
@@ -964,6 +993,10 @@ class DefaultMovementController(
     }
 
     private fun applyKeys(client: MinecraftClient, input: MovementInput) {
+        if (client.currentScreen != null) {
+            releaseKeys(client)
+            return
+        }
         client.options.forwardKey.setPressed(input.forward)
         client.options.backKey.setPressed(input.back)
         client.options.leftKey.setPressed(input.left)
@@ -974,12 +1007,41 @@ class DefaultMovementController(
     }
 
     private fun releaseKeys(client: MinecraftClient) {
-        client.options.forwardKey.setPressed(false)
-        client.options.backKey.setPressed(false)
-        client.options.leftKey.setPressed(false)
-        client.options.rightKey.setPressed(false)
-        client.options.jumpKey.setPressed(false)
-        client.options.sneakKey.setPressed(false)
-        client.options.sprintKey.setPressed(false)
+        if (client.currentScreen != null) {
+            client.options.forwardKey.setPressed(false)
+            client.options.backKey.setPressed(false)
+            client.options.leftKey.setPressed(false)
+            client.options.rightKey.setPressed(false)
+            client.options.jumpKey.setPressed(false)
+            client.options.sneakKey.setPressed(false)
+            client.options.sprintKey.setPressed(false)
+            return
+        }
+        restorePhysicalKeyState(client, client.options.forwardKey)
+        restorePhysicalKeyState(client, client.options.backKey)
+        restorePhysicalKeyState(client, client.options.leftKey)
+        restorePhysicalKeyState(client, client.options.rightKey)
+        restorePhysicalKeyState(client, client.options.jumpKey)
+        restorePhysicalKeyState(client, client.options.sneakKey)
+        restorePhysicalKeyState(client, client.options.sprintKey)
+    }
+
+    private fun restorePhysicalKeyState(client: MinecraftClient, keyBinding: KeyBinding) {
+        if (client.currentScreen != null) {
+            keyBinding.setPressed(false)
+            return
+        }
+        try {
+            val key = InputUtil.fromTranslationKey(keyBinding.boundKeyTranslationKey)
+            val window = client.window?.handle ?: return keyBinding.setPressed(false)
+            val isPhysicallyPressed = if (key.category == InputUtil.Type.MOUSE) {
+                GLFW.glfwGetMouseButton(window, key.code) == GLFW.GLFW_PRESS
+            } else {
+                GLFW.glfwGetKey(window, key.code) == GLFW.GLFW_PRESS
+            }
+            keyBinding.setPressed(isPhysicallyPressed)
+        } catch (e: Exception) {
+            keyBinding.setPressed(false)
+        }
     }
 }

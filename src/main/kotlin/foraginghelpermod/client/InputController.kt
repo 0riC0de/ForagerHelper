@@ -70,6 +70,13 @@ object InputController {
 			openOptions()
 		}
 
+		if (client.currentScreen != null) {
+			// Never keep synthetic movement active or process movement while any GUI is open (inventory, chat, screens).
+			com.github.foragerhelper.movement.MovementController.stop()
+			WalkController.stop(client)
+			return
+		}
+
 		val manualGoal = HelperConfig.manualRouteGoal
 		if (manualGoal != null) {
 			val active = com.github.foragerhelper.movement.MovementController.activeTarget
@@ -89,11 +96,6 @@ object InputController {
 
 		if (!HelperConfig.enabled) {
 			clearScan(client)
-			return
-		}
-		if (client.currentScreen != null) {
-			// Never keep synthetic movement active while any GUI is open.
-			WalkController.stop(client)
 			return
 		}
 

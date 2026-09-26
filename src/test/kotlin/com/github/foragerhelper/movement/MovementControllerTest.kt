@@ -1072,4 +1072,88 @@ class MovementControllerTest {
             "Resolved stand spot must allow player to reach the block"
         )
     }
+
+    @Test
+    fun testSlabSideObstacleNotBlocked() {
+        val grid = TestWorldGrid()
+        grid.addFlatPlatform(-3, 3, -3, 3, 63)
+        grid.setSlab(1, 64, 0, top = false)
+
+        env.playerPosVec = Vec3d(0.5, 64.0, 0.5)
+        controller.pathEnvironmentProvider = { grid }
+
+        val blocked = controller.isSideBlocked(env, 1.0, 0.0)
+        assertFalse(
+            blocked,
+            "Bottom slab beside the player must NOT be detected as a solid wall side obstacle"
+        )
+    }
+
+    @Test
+    fun testStandingOnSlabCanStepUpToFullBlock() {
+        env.playerPosVec = Vec3d(0.5, 64.5, 0.5)
+        val targetWp = Vec3d(0.5, 65.5, 1.5)
+        controller.setDestination(PositionTarget(targetWp, arrivalRadius = 0.5))
+        controller.setWaypointsForTest(listOf(targetWp))
+
+        val input = controller.tick(env, playerYaw = 0.0f)
+        assertTrue(
+            input.jump,
+            "Player standing on a slab must jump when stepping up to a 1.0m higher block"
+        )
+    }
+
+    @Test
+    fun testConsecutive2BlockParkourGapsSprintsAndJumps() {
+        env.playerPosVec = Vec3d(0.2, 64.0, 0.0)
+        env.setAir(BlockPos(1, 64, 0))
+        env.setAir(BlockPos(1, 63, 0))
+        env.setAir(BlockPos(2, 64, 0))
+        env.setAir(BlockPos(2, 63, 0))
+        env.setAir(BlockPos(4, 64, 0))
+        env.setAir(BlockPos(4, 63, 0))
+        env.setAir(BlockPos(5, 64, 0))
+        env.setAir(BlockPos(5, 63, 0))
+
+        val wp1 = Vec3d(3.5, 64.0, 0.0)
+        val wp2 = Vec3d(6.5, 64.0, 0.0)
+        val target = PositionTarget(wp2, arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(wp1, wp2), index = 0)
+
+        // Approaching first 2-block gap towards Island 1
+        val input1 = controller.tick(env, playerYaw = -90.0f)
+        assertTrue(input1.sprint, "Must sprint across first parkour gap")
+        assertTrue(input1.jump, "Must jump across first parkour gap")
+
+        // Player lands on Island 1 and targets Landing 2 (consecutive 2-block gap)
+        env.playerPosVec = Vec3d(3.4, 64.0, 0.0)
+        controller.setWaypointsForTest(listOf(wp1, wp2), index = 1)
+        val input2 = controller.tick(env, playerYaw = -90.0f)
+        assertTrue(input2.sprint, "Must maintain sprint on consecutive parkour gap")
+        assertTrue(input2.jump, "Must jump across second consecutive parkour gap")
+    }
+
+    @Test
+    fun testRepathRateLimitedWhenWaypointsEmpty() {
+        var pathComputedCount = 0
+        val mockPathfinder = object : Pathfinder by controller.pathfinder {
+            override fun findPath(env: PathEnvironment, start: Vec3d, goal: Vec3d, allowedRange: Double): PathResult {
+                pathComputedCount++
+                return PathResult(success = false, waypoints = emptyList(), blockedReason = "Unreachable")
+            }
+        }
+        val customController = DefaultMovementController(pathfinder = mockPathfinder, repathIntervalTicks = 20)
+        customController.pathEnvironmentProvider = { TestWorldGrid() }
+        val target = PositionTarget(Vec3d(20.0, 64.0, 20.0))
+        customController.setDestination(target)
+
+        customController.tick(env, playerYaw = 0.0f)
+        assertEquals(1, pathComputedCount, "Initial path should be computed immediately on tick 0")
+
+        for (t in 1..10) {
+            customController.tick(env, playerYaw = 0.0f)
+        }
+        assertEquals(1, pathComputedCount, "Pathfinder must NOT be re-invoked every tick when waypoints are empty (rate-limited)")
+    }
 }

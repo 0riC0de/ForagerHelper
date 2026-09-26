@@ -74,10 +74,17 @@ class WorldTargetEnvironment(
     override fun isStepUpBlock(pos: BlockPos): Boolean {
         val state = world.getBlockState(pos)
         val block = state.block
-        if (block is StairsBlock || block is SlabBlock) return true
-        val stateBelow = world.getBlockState(pos.down())
-        val blockBelow = stateBelow.block
-        return blockBelow is StairsBlock || blockBelow is SlabBlock
+        if (block is StairsBlock) {
+            val shape = state.getCollisionShape(world, pos)
+            val minY = shape.boundingBoxes.minOfOrNull { it.minY } ?: 0.0
+            return minY < 0.1
+        }
+        if (block is SlabBlock) {
+            val shape = state.getCollisionShape(world, pos)
+            val maxY = shape.boundingBoxes.maxOfOrNull { it.maxY } ?: 0.0
+            return maxY in 0.4..0.6
+        }
+        return false
     }
 
     override fun getLivingEntitiesInBox(box: Box): List<LivingEntity> {
