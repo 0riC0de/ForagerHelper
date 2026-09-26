@@ -896,4 +896,180 @@ class MovementControllerTest {
             )
         }
     }
+
+    @Test
+    fun testSideWallCornerClearancePastBlockBeforeTurning() {
+        // Wall block at (-1, 64, 0). Corridor along X=0, Z from 0.0 to 2.0.
+        // Target is at (-2.0, 64.0, 2.0) (requiring a turn to the right after the wall ends at Z=1.0).
+        env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
+        env.setSolid(BlockPos(-1, 64, 0))
+
+        val target = PositionTarget(Vec3d(-2.0, 64.0, 2.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(
+            Vec3d(0.0, 64.0, 1.5),
+            Vec3d(-2.0, 64.0, 2.0)
+        ))
+
+        // 1. When player center reaches Z=1.05 (just barely past corner, but rear of bounding box is still alongside wall at Z in 0.75..1.0):
+        env.playerPosVec = Vec3d(0.0, 64.0, 1.05)
+        val inputAtEdge = controller.tick(env, playerYaw = 0.0f)
+        assertFalse(
+            inputAtEdge.right,
+            "Must NOT turn or strafe right immediately after center passes wall edge; player body is still clearing corner"
+        )
+        assertTrue(
+            inputAtEdge.forward,
+            "Must continue walking straight forward past the corner"
+        )
+
+        // Camera lookahead must not snap right into the wall corner
+        val rotEngine = controller.rotationEngine as com.github.foragerhelper.rotation.DefaultRotationEngine
+        val tangentAtEdge = rotEngine.pathTangentVector
+        assertNotNull(tangentAtEdge)
+        assertTrue(
+            tangentAtEdge!!.z > 0.0 && tangentAtEdge.x >= -0.1,
+            "Camera lookahead must stay forward along corridor, not flick into right wall"
+        )
+
+        // 2. Player advances forward to Z=1.55 (completely clearing the wall block and margin):
+        env.playerPosVec = Vec3d(0.0, 64.0, 1.55)
+        // Advance waypoint to (-2.0, 64.0, 2.0)
+        controller.setWaypointsForTest(listOf(Vec3d(-2.0, 64.0, 2.0)), index = 0)
+
+        // Consume clearance ticks
+        for (i in 0 until 7) {
+            controller.tick(env, playerYaw = 0.0f)
+        }
+
+        val inputAfterClearance = controller.tick(env, playerYaw = 0.0f)
+        assertTrue(
+            inputAfterClearance.right,
+            "After fully clearing corner wall with clearance margin, player should now walk right towards destination"
+        )
+    }
+
+    @Test
+    fun testOverheadDestinationParkourPreservesWaypointsAcrossRepathInterval() {
+        // Overhead destination at (0.0, 68.0, 0.0). Player starts climbing at (0.0, 65.0, 1.0).
+        env.playerPosVec = Vec3d(0.0, 65.0, 1.0)
+        val target = PositionTarget(Vec3d(0.0, 68.0, 0.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+
+        val parkourWaypoints = listOf(
+            Vec3d(0.0, 66.0, 2.0),
+            Vec3d(0.0, 67.0, 1.0),
+            Vec3d(0.0, 68.0, 0.0)
+        )
+        controller.setWaypointsForTest(parkourWaypoints, index = 0)
+
+        // Tick 25 times (exceeding repathIntervalTicks = 20)
+        for (t in 1..25) {
+            val input = controller.tick(env, playerYaw = 0.0f)
+            assertTrue(
+                input.jump,
+                "Must continue jumping/climbing up parkour blocks across repath intervals"
+            )
+        }
+
+        assertEquals(
+            3,
+            controller.currentWaypoints.size,
+            "Climbing waypoints must NOT be wiped out after repath interval ticks when navigating under overhead destination"
+        )
+        assertEquals(
+            0,
+            controller.currentWaypointIndex,
+            "Must maintain active waypoint progression"
+        )
+    }
+
+    @Test
+    fun testIslandTerrainBridgeRouteWithLargeOffsetDetour() {
+        val grid = TestWorldGrid()
+        // Island A: (0..15, 63, 0..15) -> stand height 64.0
+        grid.addFlatPlatform(0, 15, 0, 15, 63)
+        // Island B: (35..50, 63, 0..15) -> stand height 64.0
+        grid.addFlatPlatform(35, 50, 0, 15, 63)
+        // Bridge connecting them offset at Z=22: from x=10 to x=40, z=22
+        // Path between Island A (z=15) and Bridge (z=22):
+        grid.addFlatPlatform(10, 12, 15, 22, 63) // spur from Island A to bridge
+        grid.addFlatPlatform(10, 40, 22, 22, 63) // bridge spanning void chasm
+        grid.addFlatPlatform(38, 40, 15, 22, 63) // spur from bridge to Island B
+
+        val goal = Vec3d(45.0, 64.0, 5.0)
+        val target = PositionTarget(goal, arrivalRadius = 0.5)
+
+        env.playerPosVec = Vec3d(5.0, 64.0, 5.0)
+        controller.pathEnvironmentProvider = { grid }
+        controller.setDestination(target)
+
+        controller.tick(env, playerYaw = 0.0f)
+
+        assertTrue(
+            controller.currentWaypoints.isNotEmpty(),
+            "Must locate bridge route even when bridge requires an offset detour"
+        )
+        // Check that none of the waypoints are in the void (x in 16..34 with z in 0..15)
+        for (wp in controller.currentWaypoints) {
+            val isOverVoid = wp.x in 16.0..34.0 && wp.z in 0.0..15.0
+            assertFalse(
+                isOverVoid,
+                "Waypoint $wp must NOT cross directly over void chasm; must use offset bridge"
+            )
+        }
+    }
+
+    @Test
+    fun testStraightStretchUnder5mSuppressesSprintJump() {
+        // Flat straight stretch of waypoints totaling only 3.5m (< 5.0m required for straight stretch)
+        env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
+        for (z in 0..4) {
+            env.setSolid(BlockPos(0, 63, z))
+        }
+        env.movementSpeed = 0.1
+        val target = PositionTarget(Vec3d(0.0, 64.0, 3.5), arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(
+            Vec3d(0.0, 64.0, 1.5),
+            Vec3d(0.0, 64.0, 3.5)
+        ))
+
+        val input = controller.tick(env, playerYaw = 0.0f)
+        assertTrue(input.forward, "Must move forward")
+        assertFalse(
+            input.jump,
+            "Must NOT sprint-jump on short stretches under 5.0m"
+        )
+    }
+
+    @Test
+    fun testBlockTargetOverheadFindsStandableSpotWithinReach() {
+        val grid = TestWorldGrid()
+        // Flat ground at y=63 -> stand height 64.0
+        grid.addFlatPlatform(-3, 3, -3, 3, 63)
+        // Tree trunk at (0, 64..67, 0)
+        for (y in 64..67) {
+            grid.setSolid(0, y, 0)
+        }
+
+        // Target is the top log at (0, 66, 0)
+        val blockPos = BlockPos(0, 66, 0)
+        val target = BlockTarget(blockPos)
+
+        env.playerPosVec = Vec3d(2.0, 64.0, 0.0)
+        controller.pathEnvironmentProvider = { grid }
+        controller.setDestination(target)
+
+        val resolved = controller.resolveBlockGoalPos(env, target)
+        // Must resolve to a valid standable ground spot around the tree, not inside the log
+        assertNotEquals(67.0, resolved.y, "Must not set goal inside solid log at Y=67")
+        assertEquals(64.0, resolved.y, 0.1, "Must resolve to standable ground spot at Y=64")
+        val eyePos = Vec3d(resolved.x, resolved.y + 1.62, resolved.z)
+        val logCenter = Vec3d(0.5, 66.5, 0.5)
+        assertTrue(
+            eyePos.distanceTo(logCenter) <= 4.5,
+            "Resolved stand spot must allow player to reach the block"
+        )
+    }
 }

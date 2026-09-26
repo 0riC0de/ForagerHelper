@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test
  */
 class FakeTargetEnvironment(
     var playerPosVec: Vec3d = Vec3d(0.0, 64.0, 0.0),
-    var playerEyePosVec: Vec3d = Vec3d(0.0, 65.62, 0.0),
+    var playerEyePosVec: Vec3d? = null,
     override var reachDistance: Double = 4.5,
     override var movementSpeed: Double = 0.1
 ) : TargetEnvironment {
@@ -60,7 +60,7 @@ class FakeTargetEnvironment(
     override fun getBlockState(pos: BlockPos): BlockState? = null
 
     override val playerPos: Vec3d get() = playerPosVec
-    override val playerEyePos: Vec3d get() = playerEyePosVec
+    override val playerEyePos: Vec3d get() = playerEyePosVec ?: Vec3d(playerPosVec.x, playerPosVec.y + 1.62, playerPosVec.z)
 }
 
 /**

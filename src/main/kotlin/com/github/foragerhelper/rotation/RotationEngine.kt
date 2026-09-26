@@ -259,7 +259,7 @@ class DefaultRotationEngine(
         if (player != null) {
             val angleMismatch = abs(MathHelper.wrapDegrees(player.yaw - currentYaw))
             val pitchMismatch = abs(player.pitch - currentPitch)
-            if (angleMismatch > 30.0f || pitchMismatch > 30.0f) {
+            if (angleMismatch > 50.0f || pitchMismatch > 45.0f) {
                 currentYaw = MathHelper.wrapDegrees(player.yaw)
                 currentPitch = MathHelper.clamp(player.pitch, -89.9f, 89.9f)
                 springSmoother.reset(currentYaw, currentPitch)

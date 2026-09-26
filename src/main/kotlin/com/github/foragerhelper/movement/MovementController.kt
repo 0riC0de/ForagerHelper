@@ -4,6 +4,7 @@ import com.github.foragerhelper.path.AStarPathfinder
 import com.github.foragerhelper.path.PathEnvironment
 import com.github.foragerhelper.path.PathResult
 import com.github.foragerhelper.path.Pathfinder
+import com.github.foragerhelper.path.SweptBoxLOS
 import com.github.foragerhelper.path.WorldPathEnvironment
 import com.github.foragerhelper.rotation.RotationEngine
 import com.github.foragerhelper.target.BlockTarget
@@ -119,6 +120,11 @@ class DefaultMovementController(
     private var ticksSincePath = 0
     private var lastGoalPos: Vec3d? = null
 
+    var rightClearanceTicks: Int = 0
+        private set
+    var leftClearanceTicks: Int = 0
+        private set
+
     override val isNavigating: Boolean
         get() = state == MovementState.PATHING || state == MovementState.RECOVERING
 
@@ -137,6 +143,8 @@ class DefaultMovementController(
         currentWaypointIndex = 0
         ticksSincePath = repathIntervalTicks // Force immediate initial path computation
         lastGoalPos = null
+        rightClearanceTicks = 0
+        leftClearanceTicks = 0
         unstuckHandler.onTargetChanged()
         state = MovementState.PATHING
     }
@@ -153,6 +161,8 @@ class DefaultMovementController(
         currentWaypointIndex = 0
         ticksSincePath = 0
         lastGoalPos = null
+        rightClearanceTicks = 0
+        leftClearanceTicks = 0
         unstuckHandler.reset()
         rotationEngine.reset()
         state = MovementState.IDLE
@@ -217,7 +227,11 @@ class DefaultMovementController(
             return lastComputedInput
         }
 
-        val goalPos = targetPos
+        val goalPos = if (target is BlockTarget) {
+            resolveBlockGoalPos(env, target)
+        } else {
+            targetPos
+        }
         if (goalPos == null) {
             stop()
             return MovementInput()
@@ -228,24 +242,44 @@ class DefaultMovementController(
         val isUnderDestination = distToGoalSq <= 2.25 && dyToGoal > 1.25
 
         if (isUnderDestination) {
-            // Player trapped below destination block (e.g. failed parkour jump)
-            pathfinder.penalizeNode(BlockPos.ofFloored(env.playerPos.x, env.playerPos.y, env.playerPos.z), 50.0f)
-            if (currentWaypoints.isEmpty() || currentWaypointIndex >= currentWaypoints.size || ticksSincePath >= repathIntervalTicks) {
-                currentWaypoints = emptyList()
-                currentWaypointIndex = 0
+            // Player below destination block: only repath if waypoints are exhausted
+            if (currentWaypoints.isEmpty() || currentWaypointIndex >= currentWaypoints.size) {
                 ticksSincePath = repathIntervalTicks
                 computePath(env, goalPos)
             }
+        }
+
+        val yawRad = Math.toRadians(playerYaw.toDouble())
+        val fwdX = -sin(yawRad)
+        val fwdZ = cos(yawRad)
+        val rightX = -cos(yawRad)
+        val rightZ = -sin(yawRad)
+
+        // Evaluate side obstacles and update clearance ticks BEFORE waypoint progression
+        val rightSideBlocked = isSideBlocked(env, rightX, rightZ, fwdX, fwdZ)
+        val leftSideBlocked = isSideBlocked(env, -rightX, -rightZ, fwdX, fwdZ)
+
+        if (rightSideBlocked) {
+            rightClearanceTicks = 6
+        } else if (rightClearanceTicks > 0) {
+            rightClearanceTicks--
+        }
+
+        if (leftSideBlocked) {
+            leftClearanceTicks = 6
+        } else if (leftClearanceTicks > 0) {
+            leftClearanceTicks--
         }
 
         ticksSincePath++
 
         // 4. Path computation / periodic re-routing
         val goalMoved = lastGoalPos != null && goalPos.squaredDistanceTo(lastGoalPos!!) > 4.0
+        val isClimbing = currentWaypoints.isNotEmpty() && currentWaypointIndex < currentWaypoints.size && dyToGoal > 1.0
         val needsPath = currentWaypoints.isEmpty() ||
                         currentWaypointIndex >= currentWaypoints.size ||
                         goalMoved ||
-                        ticksSincePath >= repathIntervalTicks
+                        (ticksSincePath >= repathIntervalTicks && !isClimbing)
 
         if (needsPath) {
             computePath(env, goalPos)
@@ -266,8 +300,9 @@ class DefaultMovementController(
                 hasLineOfSightRay(env, env.playerEyePos, nextEye)
             } else true
 
-            // Corner wall protection: if turning around an obscured corner, do not cut corner early
-            val effectiveRadius = if (!nextWpVisible) 0.35 else waypointRadius
+            // Corner wall protection: if turning around an obscured corner or side obstacle present, do not cut corner early
+            val sideHazard = rightSideBlocked || leftSideBlocked || rightClearanceTicks > 0 || leftClearanceTicks > 0
+            val effectiveRadius = if (!nextWpVisible || sideHazard) 0.35 else waypointRadius
             val reachedFlat = distSq <= effectiveRadius * effectiveRadius && Math.abs(dy) <= 1.25
 
             // Safe drop progression: advance intermediate drop waypoint if aligned horizontally and safe
@@ -355,14 +390,6 @@ class DefaultMovementController(
         val dy = targetWp.y - env.playerPos.y
         val dist = sqrt(dx * dx + dz * dz)
 
-        val yawRad = Math.toRadians(playerYaw.toDouble())
-        val fwdX = -sin(yawRad)
-        val fwdZ = cos(yawRad)
-        // In Minecraft coords: +X is East, +Z is South.
-        // Facing South (yaw=0): forward=(0,1), Right (West) is (-1,0), Left (East) is (1,0).
-        val rightX = -cos(yawRad)
-        val rightZ = -sin(yawRad)
-
         val forwardDot = if (dist > 0.01) (dx * fwdX + dz * fwdZ) / dist else 0.0
         val rightDot = if (dist > 0.01) (dx * rightX + dz * rightZ) / dist else 0.0
 
@@ -377,12 +404,12 @@ class DefaultMovementController(
 
         // Wall obstacle clearance: if turning or strafing laterally into a side obstacle, suppress strafe
         // and walk straight forward until the player's bounding box clears the side block!
-        val rightBlocked = moveRightRaw && isSideBlocked(env, rightX, rightZ)
-        val leftBlocked = moveLeftRaw && isSideBlocked(env, -rightX, -rightZ)
+        val rightBlocked = moveRightRaw && (rightSideBlocked || rightClearanceTicks > 0)
+        val leftBlocked = moveLeftRaw && (leftSideBlocked || leftClearanceTicks > 0)
 
         val moveRight = moveRightRaw && !rightBlocked
         val moveLeft = moveLeftRaw && !leftBlocked
-        val moveFwd = moveFwdRaw || ((rightBlocked || leftBlocked) && !inDeadzone)
+        val moveFwd = moveFwdRaw || ((rightBlocked || leftBlocked || rightClearanceTicks > 0 || leftClearanceTicks > 0) && !inDeadzone)
 
         // Fallsafe: unsafe drop abort check
         val isUnsafeDrop = dy < -3.5
@@ -415,13 +442,13 @@ class DefaultMovementController(
         val parkourJump = !isStairOrSlab && isGap && forwardDot > 0.65 && (isNearEdge || dist in 0.8..3.5)
 
         // Sprint-jump only on long straight flat stretches, never on stairs, and never if high speed
-        val RUNNING_FASTER_THAN_JUMPING_SPEED = 0.22
+        val RUNNING_FASTER_THAN_JUMPING_SPEED = 0.20
         val isHighSpeed = env.movementSpeed >= RUNNING_FASTER_THAN_JUMPING_SPEED
         val isStraightStretch = hasStraightStretchAhead(env, currentWaypoints, currentWaypointIndex)
-        val sprintJump = !isHighSpeed && isStraightStretch && moveFwd && forwardDot > 0.85 && abs(dy) <= 0.25 && !isUnderDestination
+        val sprintJump = !isHighSpeed && isStraightStretch && moveFwd && forwardDot > 0.88 && abs(dy) <= 0.25 && !isUnderDestination
 
         // Only suppress jumping under destination if moving along flat ground/escape path; allow climbing jumps
-        val allowJumpUnderDestination = canStepUp || (parkourJump && dy > 0.5)
+        val allowJumpUnderDestination = canStepUp || (parkourJump && dy > 0.5) || dy > 0.4
         val isTrappedUnderCeiling = isUnderDestination && !allowJumpUnderDestination
         val jump = !isTrappedUnderCeiling && (canStepUp || parkourJump || sprintJump)
         val sprint = (isGap && forwardDot > 0.3) || (moveFwd && forwardDot > 0.82 && (dist > 3.0 || isStraightStretch)) || (isSafeDrop && dist < 1.0)
@@ -442,8 +469,8 @@ class DefaultMovementController(
                         val candDist = sqrt(candDx * candDx + candDz * candDz)
                         if (candDist > 0.01) {
                             val candRightDot = (candDx * rightX + candDz * rightZ) / candDist
-                            if (candRightDot > 0.38 && rightBlocked) break
-                            if (candRightDot < -0.38 && leftBlocked) break
+                            if (candRightDot > 0.25 && (rightSideBlocked || rightClearanceTicks > 0)) break
+                            if (candRightDot < -0.25 && (leftSideBlocked || leftClearanceTicks > 0)) break
                         }
                     }
                     bestLookIndex = idx
@@ -470,13 +497,16 @@ class DefaultMovementController(
             }
             partFocusPoint = Vec3d(lookWp.x, lookWp.y + 1.3, lookWp.z)
         } else if (currentWaypoints.isNotEmpty()) {
-            // Future waypoints obscured by wall: walk straight along corridor tangent to get out of the way!
+            // Future waypoints obscured by wall or turning suppressed: walk straight along corridor tangent
             val wp = currentWaypoints[currentWaypointIndex]
-            lookAheadTangent = Vec3d(
-                wp.x - env.playerPos.x,
-                0.0,
-                wp.z - env.playerPos.z
-            )
+            val wpDx = wp.x - env.playerPos.x
+            val wpDz = wp.z - env.playerPos.z
+            val wpDist = sqrt(wpDx * wpDx + wpDz * wpDz)
+            if (wpDist > 0.1) {
+                lookAheadTangent = Vec3d(wpDx, 0.0, wpDz)
+            } else {
+                lookAheadTangent = Vec3d(fwdX, 0.0, fwdZ)
+            }
             partFocusPoint = null
         } else {
             val focus = target.getFocusPoint(env)
@@ -491,8 +521,14 @@ class DefaultMovementController(
 
         rotationEngine.setPathTangent(lookAheadTangent)
 
+        val isStaringAtCeiling = isUnderDestination && (
+            partFocusPoint == null ||
+            (partFocusPoint.y - env.playerEyePos.y > 1.2 && distToGoalSq <= 2.25 && currentWaypointIndex >= currentWaypoints.lastIndex)
+        )
+
         val canSeeFocus = partFocusPoint != null &&
-            !isUnderDestination &&
+            !isStaringAtCeiling &&
+            (!isUnderDestination || dyToGoal <= 1.0 || (bestLookIndex != null && currentWaypointIndex < currentWaypoints.lastIndex)) &&
             hasLineOfSightRay(env, env.playerEyePos, partFocusPoint)
 
         if (canSeeFocus) {
@@ -579,19 +615,33 @@ class DefaultMovementController(
         return true
     }
 
-    fun isSideBlocked(env: TargetEnvironment, dirX: Double, dirZ: Double): Boolean {
-        val probeDist = 0.45
-        val px = env.playerPos.x + dirX * probeDist
-        val pz = env.playerPos.z + dirZ * probeDist
-        val footPos = BlockPos.ofFloored(px, env.playerPos.y + 0.2, pz)
-        val headPos = BlockPos.ofFloored(px, env.playerPos.y + 1.2, pz)
+    fun isSideBlocked(
+        env: TargetEnvironment,
+        dirX: Double,
+        dirZ: Double,
+        fwdX: Double = 0.0,
+        fwdZ: Double = 0.0
+    ): Boolean {
+        val probeDist = 0.50
         val pathEnv = pathEnvironmentProvider?.invoke(env) ?: (env as? PathEnvironment) ?:
             (if (env is WorldTargetEnvironment) WorldPathEnvironment(env.world) else null)
-        if (pathEnv != null) {
-            return pathEnv.isSolid(footPos) || pathEnv.isSolid(headPos)
+
+        val longitudinalOffsets = doubleArrayOf(0.0, -0.40, -0.20, 0.25)
+        for (longOffset in longitudinalOffsets) {
+            val px = env.playerPos.x + dirX * probeDist + fwdX * longOffset
+            val pz = env.playerPos.z + dirZ * probeDist + fwdZ * longOffset
+            val footPos = BlockPos.ofFloored(px, env.playerPos.y + 0.2, pz)
+            val headPos = BlockPos.ofFloored(px, env.playerPos.y + 1.2, pz)
+
+            val blocked = if (pathEnv != null) {
+                pathEnv.isSolid(footPos) || pathEnv.isSolid(headPos)
+            } else {
+                (!env.isAir(footPos) && !env.isTargetBlock(footPos)) ||
+                (!env.isAir(headPos) && !env.isTargetBlock(headPos))
+            }
+            if (blocked) return true
         }
-        return (!env.isAir(footPos) && !env.isTargetBlock(footPos)) ||
-               (!env.isAir(headPos) && !env.isTargetBlock(headPos))
+        return false
     }
 
     fun hasStraightStretchAhead(
@@ -610,18 +660,17 @@ class DefaultMovementController(
         val wp0Block = BlockPos.ofFloored(wp0.x, wp0.y, wp0.z)
         if (env.isStepUpBlock(wp0Block) || env.isStepUpBlock(wp0Block.down())) return false
 
-        // If current waypoint alone is >= 3.0m away in a straight line on flat ground
-        if (d0 >= 3.0) {
+        val MIN_STRAIGHT_DISTANCE = 5.0
+        if (d0 >= MIN_STRAIGHT_DISTANCE) {
             return true
         }
 
-        // Otherwise check if subsequent waypoints form a collinear stretch of >= 3.0m
         var accumulatedDist = d0
         var prevWp = wp0
         var prevDirX = if (d0 > 0.01) v0x / d0 else 0.0
         var prevDirZ = if (d0 > 0.01) v0z / d0 else 0.0
 
-        val checkLimit = minOf(currentIndex + 4, waypoints.size - 1)
+        val checkLimit = minOf(currentIndex + 6, waypoints.size - 1)
         for (i in (currentIndex + 1)..checkLimit) {
             val nextWp = waypoints[i]
             if (abs(nextWp.y - start.y) > 0.3) return false
@@ -636,12 +685,16 @@ class DefaultMovementController(
             val dirX = segX / segDist
             val dirZ = segZ / segDist
             val dot = prevDirX * dirX + prevDirZ * dirZ
-            if (dot < 0.90) {
-                // Upcoming turn: not a straight stretch!
+            if (dot < 0.92) {
                 break
             }
             accumulatedDist += segDist
-            if (accumulatedDist >= 3.0) {
+            if (accumulatedDist >= MIN_STRAIGHT_DISTANCE) {
+                if (i + 1 < waypoints.size) {
+                    val afterWp = waypoints[i + 1]
+                    val afterBlock = BlockPos.ofFloored(afterWp.x, afterWp.y, afterWp.z)
+                    if (env.isStepUpBlock(afterBlock) || env.isStepUpBlock(afterBlock.down())) return false
+                }
                 return true
             }
             prevWp = nextWp
@@ -649,7 +702,164 @@ class DefaultMovementController(
             prevDirZ = dirZ
         }
 
-        return accumulatedDist >= 3.0
+        return accumulatedDist >= MIN_STRAIGHT_DISTANCE
+    }
+
+    fun resolveBlockGoalPos(env: TargetEnvironment, target: BlockTarget): Vec3d {
+        val bp = target.blockPos
+        val defaultGoal = target.getTargetPos(env) ?: Vec3d(bp.x + 0.5, bp.y + 1.0, bp.z + 0.5)
+
+        val pathEnv = pathEnvironmentProvider?.invoke(env)
+            ?: (if (env is WorldTargetEnvironment) WorldPathEnvironment(env.world) else null)
+            ?: (env as? PathEnvironment)
+
+        val topPos = BlockPos(bp.x, bp.y + 1, bp.z)
+        val canStandOnTop = pathEnv != null &&
+            !pathEnv.isSolid(topPos) && !pathEnv.isSolid(topPos.up()) &&
+            (pathEnv.getStandHeight(topPos) != null || pathEnv.isSolid(bp))
+
+        if (canStandOnTop) {
+            return defaultGoal
+        }
+
+        if (pathEnv != null) {
+            val reach = env.reachDistance
+            val reachSq = reach * reach
+            val bCenter = Vec3d(bp.x + 0.5, bp.y + 0.5, bp.z + 0.5)
+
+            var bestSpot: Vec3d? = null
+            var bestDistToPlayerSq = Double.MAX_VALUE
+
+            for (dx in -4..4) {
+                for (dz in -4..4) {
+                    for (dy in -3..3) {
+                        val candPos = BlockPos(bp.x + dx, bp.y + dy, bp.z + dz)
+                        val standY = pathEnv.getStandHeight(candPos) ?: continue
+                        val candVec = Vec3d(candPos.x + 0.5, standY, candPos.z + 0.5)
+                        val eyeVec = Vec3d(candVec.x, candVec.y + 1.62, candVec.z)
+
+                        if (eyeVec.squaredDistanceTo(bCenter) <= reachSq) {
+                            val distToPlayerSq = env.playerPos.squaredDistanceTo(candVec)
+                            if (distToPlayerSq < bestDistToPlayerSq) {
+                                bestDistToPlayerSq = distToPlayerSq
+                                bestSpot = candVec
+                            }
+                        }
+                    }
+                }
+            }
+            if (bestSpot != null) {
+                return bestSpot
+            }
+        }
+
+        return defaultGoal
+    }
+
+    fun findBridgeRoute(
+        pathEnv: PathEnvironment,
+        start: Vec3d,
+        goal: Vec3d,
+        maxNodes: Int = 6000
+    ): PathResult? {
+        val startPos = BlockPos.ofFloored(start.x, start.y, start.z)
+        val startGroundY = pathEnv.getStandHeight(startPos) ?: start.y
+        val startVec = Vec3d(startPos.x + 0.5, startGroundY, startPos.z + 0.5)
+
+        val queue = ArrayDeque<BlockPos>()
+        val parentMap = HashMap<Long, BlockPos>()
+        val standYMap = HashMap<Long, Double>()
+        val visited = HashSet<Long>()
+
+        val startKey = startPos.asLong()
+        queue.add(startPos)
+        visited.add(startKey)
+        standYMap[startKey] = startGroundY
+
+        var bestPos: BlockPos = startPos
+        var bestDistSq = startVec.squaredDistanceTo(goal)
+        var goalFoundPos: BlockPos? = null
+
+        val CARDINALS = arrayOf(
+            BlockPos(0, 0, -1),
+            BlockPos(0, 0, 1),
+            BlockPos(1, 0, 0),
+            BlockPos(-1, 0, 0)
+        )
+
+        var expansions = 0
+        while (queue.isNotEmpty() && expansions < maxNodes) {
+            val currentPos = queue.removeFirst()
+            expansions++
+
+            val curKey = currentPos.asLong()
+            val curY = standYMap[curKey] ?: currentPos.y.toDouble()
+            val currentVec = Vec3d(currentPos.x + 0.5, curY, currentPos.z + 0.5)
+            val dSq = currentVec.squaredDistanceTo(goal)
+
+            if (dSq < bestDistSq) {
+                bestDistSq = dSq
+                bestPos = currentPos
+            }
+
+            if (dSq <= 2.25) {
+                goalFoundPos = currentPos
+                break
+            }
+
+            for (offset in CARDINALS) {
+                val nextPos = currentPos.add(offset)
+                val nextKey = nextPos.asLong()
+                if (nextKey in visited) continue
+
+                var validGroundY: Double? = null
+                var finalPos = nextPos
+
+                val hFlat = pathEnv.getStandHeight(nextPos)
+                if (hFlat != null && abs(hFlat - curY) <= 0.65) {
+                    validGroundY = hFlat
+                } else {
+                    val hUp = pathEnv.getStandHeight(nextPos.up())
+                    if (hUp != null && (hUp - curY) in 0.35..1.25) {
+                        validGroundY = hUp
+                        finalPos = nextPos.up()
+                    } else {
+                        val hDown = pathEnv.getStandHeight(nextPos.down())
+                        if (hDown != null && (curY - hDown) in 0.35..1.25) {
+                            validGroundY = hDown
+                            finalPos = nextPos.down()
+                        }
+                    }
+                }
+
+                if (validGroundY != null) {
+                    val finalKey = finalPos.asLong()
+                    if (finalKey !in visited) {
+                        visited.add(finalKey)
+                        parentMap[finalKey] = currentPos
+                        standYMap[finalKey] = validGroundY
+                        queue.add(finalPos)
+                    }
+                }
+            }
+        }
+
+        val targetEndPos = goalFoundPos ?: (if (bestDistSq < startVec.squaredDistanceTo(goal) - 16.0) bestPos else null)
+        if (targetEndPos == null) return null
+
+        val rawWaypoints = ArrayList<Vec3d>()
+        var curr: BlockPos? = targetEndPos
+        while (curr != null) {
+            val y = standYMap[curr.asLong()] ?: curr.y.toDouble()
+            rawWaypoints.add(Vec3d(curr.x + 0.5, y, curr.z + 0.5))
+            curr = parentMap[curr.asLong()]
+        }
+        rawWaypoints.reverse()
+
+        if (rawWaypoints.isEmpty()) return null
+
+        val smoothed = SweptBoxLOS.smoothPath(pathEnv, rawWaypoints, isAnchorNode = null)
+        return PathResult(success = true, waypoints = smoothed)
     }
 
     private fun findStandHeightNear(pathEnv: PathEnvironment?, x: Double, refY: Double, z: Double): Double? {
@@ -670,11 +880,12 @@ class DefaultMovementController(
         lastGoalPos = goalPos
 
         val pathEnv = pathEnvironmentProvider?.invoke(env)
+            ?: (if (env is WorldTargetEnvironment) WorldPathEnvironment(env.world) else null)
             ?: (env as? PathEnvironment)
 
         val totalDist = env.playerPos.distanceTo(goalPos)
 
-        // 1. Direct pathfinding: search directly to goalPos if within range (<= 96m),
+        // 1. Direct pathfinding: search directly to goalPos if within range (<= 128m),
         // allowing A* to find complete bridge routes across void/chasms!
         val directResult = when {
             pathEnv != null -> pathfinder.findPath(pathEnv, env.playerPos, goalPos)
@@ -688,32 +899,52 @@ class DefaultMovementController(
             return
         }
 
-        // 2. Segmented pathfinding for very long distance routes (> 36m)
+        // 2. Island terrain bridge search: search for contiguous walkable ground / bridge route
+        // before giving up or falling back to segmented routing!
+        if (pathEnv != null) {
+            val bridgeResult = findBridgeRoute(pathEnv, env.playerPos, goalPos)
+            if (bridgeResult != null && bridgeResult.success && bridgeResult.waypoints.isNotEmpty()) {
+                currentWaypoints = bridgeResult.waypoints
+                currentWaypointIndex = 0
+                return
+            }
+        }
+
+        // 3. Segmented pathfinding for very long distance routes (> 36m)
         if (totalDist > 36.0) {
             val dirX = (goalPos.x - env.playerPos.x) / totalDist
             val dirZ = (goalPos.z - env.playerPos.z) / totalDist
-            val segDist = minOf(30.0, totalDist)
-            val subX = env.playerPos.x + dirX * segDist
-            val subZ = env.playerPos.z + dirZ * segDist
-            val standY = findStandHeightNear(pathEnv, subX, env.playerPos.y, subZ)
+            val angles = doubleArrayOf(0.0, 15.0, -15.0, 30.0, -30.0, 45.0, -45.0, 60.0, -60.0)
+            for (angleDeg in angles) {
+                val rad = Math.toRadians(angleDeg)
+                val cosA = kotlin.math.cos(rad)
+                val sinA = kotlin.math.sin(rad)
+                val rotDirX = dirX * cosA - dirZ * sinA
+                val rotDirZ = dirX * sinA + dirZ * cosA
 
-            // Only navigate towards an intermediate waypoint if valid walkable ground actually exists!
-            if (standY != null) {
-                val subGoal = Vec3d(subX, standY, subZ)
-                val segResult = when {
-                    pathEnv != null -> pathfinder.findPath(pathEnv, env.playerPos, subGoal)
-                    env is WorldTargetEnvironment -> pathfinder.findPath(env.world, env.playerPos, subGoal)
-                    else -> null
-                }
-                if (segResult != null && segResult.success && segResult.waypoints.isNotEmpty()) {
-                    currentWaypoints = segResult.waypoints
-                    currentWaypointIndex = 0
-                    return
+                for (segDist in doubleArrayOf(minOf(30.0, totalDist), 20.0, 15.0, 10.0)) {
+                    val subX = env.playerPos.x + rotDirX * segDist
+                    val subZ = env.playerPos.z + rotDirZ * segDist
+                    val standY = findStandHeightNear(pathEnv, subX, env.playerPos.y, subZ)
+
+                    if (standY != null) {
+                        val subGoal = Vec3d(subX, standY, subZ)
+                        val segResult = when {
+                            pathEnv != null -> pathfinder.findPath(pathEnv, env.playerPos, subGoal)
+                            env is WorldTargetEnvironment -> pathfinder.findPath(env.world, env.playerPos, subGoal)
+                            else -> null
+                        }
+                        if (segResult != null && segResult.success && segResult.waypoints.isNotEmpty()) {
+                            currentWaypoints = segResult.waypoints
+                            currentWaypointIndex = 0
+                            return
+                        }
+                    }
                 }
             }
         }
 
-        // 3. Fallback for headless environments without pathEnv/world
+        // 4. Fallback for headless environments without pathEnv/world
         if (pathEnv == null && env !is WorldTargetEnvironment) {
             val fallbackGoal = if (totalDist > 36.0) {
                 val dirX = (goalPos.x - env.playerPos.x) / totalDist

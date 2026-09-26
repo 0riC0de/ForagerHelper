@@ -99,15 +99,42 @@ data class NeighborEdge(
 )
 
 /**
+ * Lightweight caching wrapper for [PathEnvironment] to accelerate repetitive node queries.
+ */
+class CachedPathEnvironment(val delegate: PathEnvironment) : PathEnvironment by delegate {
+    private val standHeightCache = HashMap<Long, Double?>()
+    private val solidCache = HashMap<Long, Boolean>()
+
+    override fun getStandHeight(pos: BlockPos): Double? {
+        val key = pos.asLong()
+        if (standHeightCache.containsKey(key)) {
+            return standHeightCache[key]
+        }
+        val h = delegate.getStandHeight(pos)
+        standHeightCache[key] = h
+        return h
+    }
+
+    override fun isSolid(pos: BlockPos): Boolean {
+        val key = pos.asLong()
+        val cached = solidCache[key]
+        if (cached != null) return cached
+        val s = delegate.isSolid(pos)
+        solidCache[key] = s
+        return s
+    }
+}
+
+/**
  * Hitbox-Aware 3D A* Pathfinder with swept-box line-of-sight smoothing.
  */
 class AStarPathfinder(
     val penaltyMap: NodePenaltyMap = NodePenaltyMap(),
-    val maxExpansions: Int = 6000,
-    val maxComputeTimeMs: Long = 50L,
-    val maxHorizontalRange: Int = 64,
+    val maxExpansions: Int = 10000,
+    val maxComputeTimeMs: Long = 150L,
+    val maxHorizontalRange: Int = 128,
     val turnPenaltyWeight: Double = 0.15,
-    val tieBreakerWeight: Double = 1e-4
+    val tieBreakerWeight: Double = 1e-5
 ) : Pathfinder {
 
     private val CARDINALS = arrayOf(
@@ -156,9 +183,10 @@ class AStarPathfinder(
             return PathResult(success = false, waypoints = emptyList(), blockedReason = "Timeout exceeded (${maxComputeTimeMs}ms)")
         }
 
+        val activeEnv = if (env is CachedPathEnvironment) env else CachedPathEnvironment(env)
         val startPos = BlockPos.ofFloored(start.x, start.y, start.z)
-        val standH = env.getStandHeight(startPos)
-        val startGroundY = standH ?: if (env.isSolid(startPos.down())) startPos.y.toDouble() else start.y
+        val standH = activeEnv.getStandHeight(startPos)
+        val startGroundY = standH ?: if (activeEnv.isSolid(startPos.down())) startPos.y.toDouble() else start.y
         val startVec = Vec3d(startPos.x + 0.5, startGroundY, startPos.z + 0.5)
 
         val allowedRangeSq = allowedRange * allowedRange
@@ -200,7 +228,7 @@ class AStarPathfinder(
                 val rawNodes = reconstruct(current)
                 val rawWaypoints = rawNodes.map { it.posVec }
                 val isAnchor: (Int) -> Boolean = { idx -> rawNodes[idx].action.isAnchor }
-                val smoothed = SweptBoxLOS.smoothPath(env, rawWaypoints, penaltyMap, isAnchor)
+                val smoothed = SweptBoxLOS.smoothPath(activeEnv, rawWaypoints, penaltyMap, isAnchor)
                 return PathResult(success = true, waypoints = smoothed)
             }
 
@@ -208,7 +236,7 @@ class AStarPathfinder(
             val recordedG = bestG[currentKey]
             if (recordedG != null && current.g > recordedG + 1e-6) continue
 
-            val neighbors = generateNeighbors(env, current, startPos, goal, startVec)
+            val neighbors = generateNeighbors(activeEnv, current, startPos, goal, startVec)
             for (edge in neighbors) {
                 val nextNode = edge.node
                 val turnPenalty = calculateTurnPenalty(current.dirX, current.dirZ, edge.dirX, edge.dirZ)
