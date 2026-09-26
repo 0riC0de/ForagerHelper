@@ -16,11 +16,19 @@ import org.junit.jupiter.api.Test
 class FakeTargetEnvironment(
     var playerPosVec: Vec3d = Vec3d(0.0, 64.0, 0.0),
     var playerEyePosVec: Vec3d = Vec3d(0.0, 65.62, 0.0),
-    override var reachDistance: Double = 4.5
+    override var reachDistance: Double = 4.5,
+    override var movementSpeed: Double = 0.1
 ) : TargetEnvironment {
     private val targetBlocks = HashSet<BlockPos>()
     private val solidBlocks = HashSet<BlockPos>()
     private val airBlocks = HashSet<BlockPos>()
+    private val stepUpBlocks = HashSet<BlockPos>()
+
+    fun setStepUpBlock(pos: BlockPos) {
+        stepUpBlocks.add(pos.toImmutable())
+    }
+
+    override fun isStepUpBlock(pos: BlockPos): Boolean = stepUpBlocks.contains(pos)
 
     fun setTargetBlock(pos: BlockPos) {
         val p = pos.toImmutable()

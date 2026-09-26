@@ -3,6 +3,7 @@ package com.github.foragerhelper.movement
 import com.github.foragerhelper.path.PathEnvironment
 import com.github.foragerhelper.path.PathResult
 import com.github.foragerhelper.path.Pathfinder
+import com.github.foragerhelper.path.TestWorldGrid
 import com.github.foragerhelper.target.BlockTarget
 import com.github.foragerhelper.target.FakeTargetEnvironment
 import com.github.foragerhelper.target.PositionTarget
@@ -731,5 +732,168 @@ class MovementControllerTest {
             0.0, tangent!!.x, 0.01,
             "Path tangent must continue straight along corridor (+Z) and not point into corner wall (+X)"
         )
+    }
+
+    // =========================================================================
+    // 7. Wall Clearance, Stairs Suppression, Sprint-Jumping, and Island Bridges
+    // =========================================================================
+
+    @Test
+    fun testStairAndSlabStepUpSuppressesJump() {
+        // Waypoint on a slab/stair at dy = +0.5m
+        env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
+        for (z in 0..2) {
+            env.setSolid(BlockPos(0, 63, z))
+        }
+        val target = PositionTarget(Vec3d(0.0, 64.5, 2.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(Vec3d(0.0, 64.5, 2.0)))
+        env.setStepUpBlock(BlockPos(0, 64, 2))
+
+        val input = controller.tick(env, playerYaw = 0.0f)
+        assertFalse(
+            input.jump,
+            "Must NOT jump on stairs or slabs: dy=0.5m is stepped up automatically without jumping"
+        )
+    }
+
+    @Test
+    fun testStraightStretchFlatGroundSprintJumps() {
+        // Flat straight stretch of waypoints totaling > 3.0m on flat ground
+        env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
+        for (z in 0..6) {
+            env.setSolid(BlockPos(0, 63, z))
+        }
+        env.movementSpeed = 0.1 // Normal vanilla speed
+        val target = PositionTarget(Vec3d(0.0, 64.0, 6.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(
+            Vec3d(0.0, 64.0, 2.0),
+            Vec3d(0.0, 64.0, 4.0),
+            Vec3d(0.0, 64.0, 6.0)
+        ))
+
+        val input = controller.tick(env, playerYaw = 0.0f) // Facing South (+Z)
+        assertTrue(input.forward, "Must move forward along straight stretch")
+        assertTrue(input.sprint, "Must sprint along straight stretch")
+        assertTrue(input.jump, "Must sprint-jump on straight flat stretches of blocks")
+    }
+
+    @Test
+    fun testHighSpeedSuppressesSprintJumping() {
+        // Exact same flat straight stretch of waypoints totaling > 3.0m
+        env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
+        for (z in 0..6) {
+            env.setSolid(BlockPos(0, 63, z))
+        }
+        env.movementSpeed = 0.25 // High speed (running faster than jumping)
+        val target = PositionTarget(Vec3d(0.0, 64.0, 6.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(
+            Vec3d(0.0, 64.0, 2.0),
+            Vec3d(0.0, 64.0, 4.0),
+            Vec3d(0.0, 64.0, 6.0)
+        ))
+
+        val input = controller.tick(env, playerYaw = 0.0f) // Facing South (+Z)
+        assertTrue(input.forward, "Must move forward along straight stretch")
+        assertTrue(input.sprint, "Must sprint along straight stretch")
+        assertFalse(
+            input.jump,
+            "Must NOT jump when speed is high enough that running is faster than jumping"
+        )
+    }
+
+    @Test
+    fun testSideWallObstacleSuppressesStrafeAndWalksStraight() {
+        // Player is at (0, 64, 0), facing South (yaw=0, +Z is forward, -X is right).
+        // Target is at (-2.0, 64.0, 2.0) (forward + right).
+        // Wall block at (-1, 64, 0) right beside the player on the right.
+        env.playerPosVec = Vec3d(0.0, 64.0, 0.0)
+        env.setSolid(BlockPos(-1, 64, 0))
+
+        val target = PositionTarget(Vec3d(-2.0, 64.0, 2.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+        controller.setWaypointsForTest(listOf(Vec3d(-2.0, 64.0, 2.0)))
+
+        val input = controller.tick(env, playerYaw = 0.0f)
+        assertFalse(
+            input.right,
+            "Must NOT strafe right into the wall block beside the player"
+        )
+        assertTrue(
+            input.forward,
+            "Must walk straight forward past the corner wall before turning right"
+        )
+
+        // Camera lookahead tangent must point forward (+Z), not into the right wall (-X)
+        val rotEngine = controller.rotationEngine as com.github.foragerhelper.rotation.DefaultRotationEngine
+        val tangent = rotEngine.pathTangentVector
+        assertNotNull(tangent)
+        assertTrue(
+            tangent!!.z > 0.0,
+            "Tangent must point forward along the corridor"
+        )
+    }
+
+    @Test
+    fun testOverheadDestinationParkourPreservesClimbingWaypoints() {
+        // Destination is overhead at (5.0, 67.0, 0.0). Player is at (5.0, 64.0, 0.0).
+        env.playerPosVec = Vec3d(5.0, 64.0, 0.0)
+        val target = PositionTarget(Vec3d(5.0, 67.0, 0.0), arrivalRadius = 0.5)
+        controller.setDestination(target)
+
+        // Parkour climbing route
+        val parkourWaypoints = listOf(
+            Vec3d(5.0, 65.0, 1.0), // Step up onto first block
+            Vec3d(5.0, 66.0, 2.0), // Parkour block
+            Vec3d(5.0, 67.0, 0.0)  // Goal
+        )
+        controller.setWaypointsForTest(parkourWaypoints)
+
+        val input = controller.tick(env, playerYaw = 0.0f)
+        assertEquals(
+            0,
+            controller.currentWaypointIndex,
+            "Must NOT skip overhead waypoints when destination is above player's head"
+        )
+        assertTrue(
+            input.jump,
+            "Must jump to step up/climb onto first parkour waypoint"
+        )
+    }
+
+    @Test
+    fun testIslandTerrainBridgeRoutePreferredOverVoid() {
+        val grid = TestWorldGrid()
+        // Island A: (0..5, 63, 0..5) -> stand height 64.0
+        grid.addFlatPlatform(0, 5, 0, 5, 63)
+        // Island B: (20..25, 63, 0..5) -> stand height 64.0
+        grid.addFlatPlatform(20, 25, 0, 5, 63)
+        // Bridge connecting them at Z=8: from x=0 to x=25, z=8
+        grid.addFlatPlatform(0, 25, 8, 8, 63)
+
+        // Goal on Island B
+        val goal = Vec3d(22.5, 64.0, 2.5)
+        val target = PositionTarget(goal, arrivalRadius = 0.5)
+
+        env.playerPosVec = Vec3d(2.5, 64.0, 2.5)
+        controller.pathEnvironmentProvider = { grid }
+        controller.setDestination(target)
+
+        controller.tick(env, playerYaw = 0.0f)
+
+        assertTrue(
+            controller.currentWaypoints.isNotEmpty(),
+            "Must find route across the bridge between islands"
+        )
+        // Crucial check: none of the waypoints may be in the void (x in 6..19 with z in 0..5)
+        for (wp in controller.currentWaypoints) {
+            val isOverVoid = wp.x in 6.0..19.0 && wp.z in 0.0..5.0
+            assertFalse(
+                isOverVoid,
+                "Waypoint $wp must NOT cross directly over void chasm; must use bridge"
+            )
+        }
     }
 }

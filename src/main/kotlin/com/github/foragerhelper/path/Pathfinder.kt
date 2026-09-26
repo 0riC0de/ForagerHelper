@@ -328,29 +328,30 @@ class AStarPathfinder(
                 }
             }
 
-            // Parkour Gap Jumps (1 to 2 block gaps)
+            // Parkour Gap Jumps (1 to 2 block gaps, flat, +1 elevation jump, or -1 drop)
             for (gapDist in 2..3) {
                 val landingPos = pos.add(dx * gapDist, 0, dz * gapDist)
                 if (abs(landingPos.x - origin.x) > maxHorizontalRange || abs(landingPos.z - origin.z) > maxHorizontalRange) continue
+
+                val takeoffApexBox = Box(pos.x + 0.2, curY + 1.8, pos.z + 0.2, pos.x + 0.8, curY + 2.5, pos.z + 0.8)
+                if (!env.isPassable(takeoffApexBox)) continue
+
+                var gapClear = true
+                var gapPenaltyCost = 0.0
+                for (g in 1 until gapDist) {
+                    val gapPos = pos.add(dx * g, 0, dz * g)
+                    val gapBox = Box(gapPos.x + 0.1, curY, gapPos.z + 0.1, gapPos.x + 0.9, curY + 2.0, gapPos.z + 0.9)
+                    if (!env.isPassable(gapBox)) {
+                        gapClear = false
+                        break
+                    }
+                    gapPenaltyCost += penaltyMap.getPenalty(BlockPos.ofFloored(gapPos.x + 0.5, curY, gapPos.z + 0.5)).toDouble()
+                }
+                if (!gapClear) continue
+
+                // Case A: Flat parkour jump (dy = 0)
                 val landingGroundY = env.getStandHeight(landingPos)
                 if (landingGroundY != null && abs(landingGroundY - curY) < 0.2) {
-                    val takeoffApexBox = Box(pos.x + 0.2, curY + 1.8, pos.z + 0.2, pos.x + 0.8, curY + 2.5, pos.z + 0.8)
-                    if (!env.isPassable(takeoffApexBox)) continue
-
-                    var gapClear = true
-                    var gapPenaltyCost = 0.0
-                    for (g in 1 until gapDist) {
-                        val gapPos = pos.add(dx * g, 0, dz * g)
-                        val gapBox = Box(gapPos.x + 0.1, curY, gapPos.z + 0.1, gapPos.x + 0.9, curY + 2.0, gapPos.z + 0.9)
-                        if (!env.isPassable(gapBox)) {
-                            gapClear = false
-                            break
-                        }
-                        // Accumulate penalties for gap nodes so parkour doesn't free-skip penalized blocks
-                        gapPenaltyCost += penaltyMap.getPenalty(BlockPos.ofFloored(gapPos.x + 0.5, curY, gapPos.z + 0.5)).toDouble()
-                    }
-                    if (!gapClear) continue
-
                     val landingBox = Box(landingPos.x + 0.2, landingGroundY + 0.02, landingPos.z + 0.2, landingPos.x + 0.8, landingGroundY + 1.8, landingPos.z + 0.8)
                     if (env.isPassable(landingBox)) {
                         val pCost = if (gapDist == 2) 2.50 else 3.20
@@ -358,6 +359,24 @@ class AStarPathfinder(
                         val node = PathNode(landingPos, vec, 0.0, computeHeuristic(vec, goal, start), null, MoveAction.PARKOUR, dx, dz)
                         result.add(NeighborEdge(node, pCost + gapPenaltyCost, dx, dz))
                         break
+                    }
+                }
+
+                // Case B: Parkour jump up 1 block across 1-block gap (gapDist = 2, dy = +1.0)
+                if (gapDist == 2) {
+                    val landingPosUp = landingPos.up()
+                    val landingGroundYUp = env.getStandHeight(landingPosUp)
+                    if (landingGroundYUp != null && abs(landingGroundYUp - (curY + 1.0)) < 0.2) {
+                        // Check extra gap headroom for rising apex
+                        val gapApexPos = pos.add(dx, 0, dz)
+                        val gapApexBox = Box(gapApexPos.x + 0.1, curY + 2.0, gapApexPos.z + 0.1, gapApexPos.x + 0.9, curY + 2.5, gapApexPos.z + 0.9)
+                        val landingBox = Box(landingPosUp.x + 0.2, landingGroundYUp + 0.02, landingPosUp.z + 0.2, landingPosUp.x + 0.8, landingGroundYUp + 1.8, landingPosUp.z + 0.8)
+                        if (env.isPassable(gapApexBox) && env.isPassable(landingBox)) {
+                            val vec = Vec3d(landingPosUp.x + 0.5, landingGroundYUp, landingPosUp.z + 0.5)
+                            val node = PathNode(landingPosUp, vec, 0.0, computeHeuristic(vec, goal, start), null, MoveAction.PARKOUR, dx, dz)
+                            result.add(NeighborEdge(node, 2.80 + gapPenaltyCost, dx, dz))
+                            break
+                        }
                     }
                 }
             }

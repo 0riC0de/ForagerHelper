@@ -319,6 +319,20 @@ class PathfinderTest {
     }
 
     @Test
+    fun testParkour1BlockGapUp1BlockElevation() {
+        grid.setSolid(0, 63, 0) // Takeoff at stand height 64.0
+        // (1, 63, 0) is air (1-block gap)
+        grid.setSolid(2, 64, 0) // Elevated landing platform at stand height 65.0 (+1 block)
+
+        val start = Vec3d(0.5, 64.0, 0.5)
+        val goal = Vec3d(2.5, 65.0, 0.5)
+
+        val result = pathfinder.findPath(grid, start, goal, allowedRange = 0.5)
+        assertTrue(result.success, "Parkour jump up 1 block across 1-block gap must succeed")
+        assertEquals(65.0, result.waypoints.last().y, 0.1, "Final waypoint must land at elevation 65.0")
+    }
+
+    @Test
     fun testParkourGapWithLowCeilingRejected() {
         grid.setSolid(0, 63, 0)
         // Gap at (1, 63, 0)

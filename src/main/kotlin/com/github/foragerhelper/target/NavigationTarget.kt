@@ -1,6 +1,8 @@
 package com.github.foragerhelper.target
 
 import net.minecraft.block.BlockState
+import net.minecraft.block.SlabBlock
+import net.minecraft.block.StairsBlock
 import net.minecraft.client.network.ClientPlayerEntity
 import net.minecraft.entity.Entity
 import net.minecraft.entity.LivingEntity
@@ -37,6 +39,12 @@ interface TargetEnvironment {
     /** Player's current reach distance (4.5 survival, 6.0 creative). */
     val reachDistance: Double
 
+    /** Player movement speed attribute (default vanilla ~0.1). */
+    val movementSpeed: Double get() = 0.1
+
+    /** Returns true if block at pos or supporting floor is stairs or slab. */
+    fun isStepUpBlock(pos: BlockPos): Boolean = false
+
     /**
      * Returns all [LivingEntity] instances whose bounding boxes overlap [box].
      * Tests may return empty.
@@ -60,6 +68,17 @@ class WorldTargetEnvironment(
 
     override val reachDistance: Double get() =
         if (player.abilities.creativeMode) 6.0 else 4.5
+
+    override val movementSpeed: Double get() = player.movementSpeed.toDouble()
+
+    override fun isStepUpBlock(pos: BlockPos): Boolean {
+        val state = world.getBlockState(pos)
+        val block = state.block
+        if (block is StairsBlock || block is SlabBlock) return true
+        val stateBelow = world.getBlockState(pos.down())
+        val blockBelow = stateBelow.block
+        return blockBelow is StairsBlock || blockBelow is SlabBlock
+    }
 
     override fun getLivingEntitiesInBox(box: Box): List<LivingEntity> {
         return world.getEntitiesByClass(LivingEntity::class.java, box) { !it.isRemoved && !it.isDead }
